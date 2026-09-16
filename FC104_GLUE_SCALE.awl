@@ -1,6 +1,17 @@
 FUNCTION "GLUE_SCALE" : VOID
 TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms
-VERSION : 0.10
+// v0.11 - Simplified "Parse integer part" network: replaced the 7
+//   duplicated digit-check blocks (Byte_0..Byte_6, one hand-unrolled
+//   per byte, ~140 lines) with a single indirect-addressed loop over
+//   Byte_0..Byte_5 plus a short unconditional block for Byte_6 - same
+//   LAR1/+AR1/DBB[AR1,P#x.y] indirect-addressing idiom this project
+//   already uses in FB1111/FB1112/FC130. Behavior is unchanged: leading
+//   spaces are skipped until the first digit (FoundDigit latches once
+//   set, matching v0.10), and Byte_6 - the field's last position - is
+//   still always parsed unconditionally, space or not. Also dropped a
+//   dead SET;=FoundDigit pair at the top that was immediately
+//   overwritten by the following CLR;=FoundDigit two lines later.
+VERSION : 0.11
 
 VAR_TEMP
    RetVal1 : INT;
@@ -9,6 +20,7 @@ VAR_TEMP
    DecDigit : DINT;
    CharVal : INT;
    FoundDigit : BOOL;
+   LoopIndex : INT;
 END_VAR
 
 BEGIN
@@ -53,23 +65,28 @@ TITLE =Validate telegram - check RetVal and fixed markers (decimal point, k, g)
       =     "GLUE_SCALE_CONTROL_DB".ParseError;
 
 NETWORK
-TITLE =Parse integer part (Byte_0-6, right-justified, space-padded)
+TITLE =Parse integer part, Byte_0-5 - loop, skip leading spaces until first digit
 
-      SET ;
+      CLR ;
       =     #FoundDigit;
       L     0;
       T     #IntPart;
-      CLR ;
-      =     #FoundDigit;
 
-      L     "ABC3000A_DB".Byte_0;
+      OPN   "ABC3000A_DB";
+      LAR1  P#0.0;
+
+      L     6;
+LP1:  T     #LoopIndex;
+
+      L     DBB [AR1,P#0.0];
       L     B#16#20;
       <>I ;
       S     #FoundDigit;
+
       A     #FoundDigit;
-      JC    DIG0;
-      JU    N0X;
-DIG0: L     "ABC3000A_DB".Byte_0;
+      JCN   ND1;
+
+      L     DBB [AR1,P#0.0];
       L     B#16#30;
       -I  ;
       T     CharVal;
@@ -80,107 +97,14 @@ DIG0: L     "ABC3000A_DB".Byte_0;
       ITD ;
       +D  ;
       T     #IntPart;
-N0X:  NOP   0;
 
-      L     "ABC3000A_DB".Byte_1;
-      L     B#16#20;
-      <>I ;
-      S     #FoundDigit;
-      A     #FoundDigit;
-      JC    DIG1;
-      JU    N1X;
-DIG1: L     "ABC3000A_DB".Byte_1;
-      L     B#16#30;
-      -I  ;
-      T     CharVal;
-      L     #IntPart;
-      L     10;
-      *D  ;
-      L     CharVal;
-      ITD ;
-      +D  ;
-      T     #IntPart;
-N1X:  NOP   0;
+ND1:  +AR1  P#1.0;
 
-      L     "ABC3000A_DB".Byte_2;
-      L     B#16#20;
-      <>I ;
-      S     #FoundDigit;
-      A     #FoundDigit;
-      JC    DIG2;
-      JU    N2X;
-DIG2: L     "ABC3000A_DB".Byte_2;
-      L     B#16#30;
-      -I  ;
-      T     CharVal;
-      L     #IntPart;
-      L     10;
-      *D  ;
-      L     CharVal;
-      ITD ;
-      +D  ;
-      T     #IntPart;
-N2X:  NOP   0;
+      L     #LoopIndex;
+      LOOP  LP1;
 
-      L     "ABC3000A_DB".Byte_3;
-      L     B#16#20;
-      <>I ;
-      S     #FoundDigit;
-      A     #FoundDigit;
-      JC    DIG3;
-      JU    N3X;
-DIG3: L     "ABC3000A_DB".Byte_3;
-      L     B#16#30;
-      -I  ;
-      T     CharVal;
-      L     #IntPart;
-      L     10;
-      *D  ;
-      L     CharVal;
-      ITD ;
-      +D  ;
-      T     #IntPart;
-N3X:  NOP   0;
-
-      L     "ABC3000A_DB".Byte_4;
-      L     B#16#20;
-      <>I ;
-      S     #FoundDigit;
-      A     #FoundDigit;
-      JC    DIG4;
-      JU    N4X;
-DIG4: L     "ABC3000A_DB".Byte_4;
-      L     B#16#30;
-      -I  ;
-      T     CharVal;
-      L     #IntPart;
-      L     10;
-      *D  ;
-      L     CharVal;
-      ITD ;
-      +D  ;
-      T     #IntPart;
-N4X:  NOP   0;
-
-      L     "ABC3000A_DB".Byte_5;
-      L     B#16#20;
-      <>I ;
-      S     #FoundDigit;
-      A     #FoundDigit;
-      JC    DIG5;
-      JU    N5X;
-DIG5: L     "ABC3000A_DB".Byte_5;
-      L     B#16#30;
-      -I  ;
-      T     CharVal;
-      L     #IntPart;
-      L     10;
-      *D  ;
-      L     CharVal;
-      ITD ;
-      +D  ;
-      T     #IntPart;
-N5X:  NOP   0;
+NETWORK
+TITLE =Parse integer part, Byte_6 - field's last position, always a digit, no space check
 
       L     "ABC3000A_DB".Byte_6;
       L     B#16#30;

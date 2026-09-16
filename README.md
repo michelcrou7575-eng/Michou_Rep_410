@@ -57,7 +57,7 @@ weight/valve/alarm state rather than acting on a bad telegram.
 ## Files
 
 - `FC104_GLUE_SCALE.awl` — SFC14 reads, ASCII parse, valve hysteresis,
-  alarm latching. Version 0.10.
+  alarm latching. Version 0.11.
 - `DB4_ABC3000A_DB.awl` — 20-byte raw telegram buffer, filled by SFC14.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
   limits, hysteresis, valve/alarm output bits. Version 0.2.
