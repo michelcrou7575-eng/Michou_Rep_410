@@ -1,0 +1,56 @@
+DATA_BLOCK "ABC3000A_DB"    DB4
+TITLE =
+VERSION : 0.4
+//Anybus Communicator (PROFIBUS) telegram buffer - KILO TECK KWS CY300 glue scale
+//Populated by FC104 via SFC14 DPRD_DAT, NOT by direct IB/PIB access
+//Layout: Byte_0..6 = right-justified space-padded integer part (ASCII)
+//        Byte_7    = '.' (0x2E, decimal point, fixed)
+//        Byte_8    = decimal digit (ASCII)
+//        Byte_9..10= 'k','g' (fixed)
+//        Byte_11..15 = always 0x00 (unused padding from Anybus Variable data field)
+//        Byte_16..19 = trailing spaces (second SFC14 block, IB289-292)
+
+  STRUCT 
+   Byte_0 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_1 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_2 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_3 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_4 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_5 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_6 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_7 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300 (always '.' 0x2E)
+   Byte_8 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300 (decimal digit)
+   Byte_9 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300 (always 'k' 0x6B)
+   Byte_10 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300 (always 'g' 0x67)
+   Byte_11 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_12 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_13 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_14 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_15 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_16 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_17 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_18 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+   Byte_19 : BYTE ;	//Glue Transfer Scale KILO TECK KWS CY300
+  END_STRUCT ;	
+BEGIN
+   Byte_0 := B#16#0; 
+   Byte_1 := B#16#0; 
+   Byte_2 := B#16#0; 
+   Byte_3 := B#16#0; 
+   Byte_4 := B#16#0; 
+   Byte_5 := B#16#0; 
+   Byte_6 := B#16#0; 
+   Byte_7 := B#16#0; 
+   Byte_8 := B#16#0; 
+   Byte_9 := B#16#0; 
+   Byte_10 := B#16#0; 
+   Byte_11 := B#16#0; 
+   Byte_12 := B#16#0; 
+   Byte_13 := B#16#0; 
+   Byte_14 := B#16#0; 
+   Byte_15 := B#16#0; 
+   Byte_16 := B#16#0; 
+   Byte_17 := B#16#0; 
+   Byte_18 := B#16#0; 
+   Byte_19 := B#16#0; 
+END_DATA_BLOCK

@@ -1,0 +1,28 @@
+DATA_BLOCK "GLUE_SCALE_CONTROL_DB"    DB105
+TITLE =Glue Scale Weight Control and Alarms
+VERSION : 0.2
+
+  STRUCT 
+   GrossWeight_Actual : REAL ;	//Parsed live weight from KWS CY300 scale (kg)
+   Setpoint_Fill : REAL ;	//Operator-entered target fill weight (kg) - HMI writable
+   AlarmLimit_Overfill : REAL ;	//Operator-entered max allowed weight (kg) - HMI writable
+   AlarmLimit_Underfill : REAL ;	//Operator-entered min allowed weight (kg) - HMI writable
+   Hysteresis : REAL ;	//Operator-entered valve hysteresis band (kg) - HMI writable
+   Valve_Open : BOOL ;	//Output: TRUE = valve open, filling in progress
+   Alarm_Overfill : BOOL ;	//Output: TRUE = weight exceeded overfill limit (latching)
+   Alarm_Underfill : BOOL ;	//Output: TRUE = weight below underfill limit at settle check (latching)
+   ParseError : BOOL ;	//Output: TRUE = ASCII parse failed this scan (bad/garbled scale data)
+   Valve_Open_Prev : BOOL ;	//Internal: previous scan Valve_Open state, for edge detection
+  END_STRUCT ;	
+BEGIN
+   GrossWeight_Actual := 0.0; 
+   Setpoint_Fill := 0.0; 
+   AlarmLimit_Overfill := 300.0; 
+   AlarmLimit_Underfill := 0.0; 
+   Hysteresis := 0.5; 
+   Valve_Open := FALSE; 
+   Alarm_Overfill := FALSE; 
+   Alarm_Underfill := FALSE; 
+   ParseError := FALSE; 
+   Valve_Open_Prev := FALSE; 
+END_DATA_BLOCK

@@ -1,0 +1,290 @@
+FUNCTION "GLUE_SCALE" : VOID
+TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms
+VERSION : 0.10
+
+VAR_TEMP
+   RetVal1 : INT;
+   RetVal2 : INT;
+   IntPart : DINT;
+   DecDigit : DINT;
+   CharVal : INT;
+   FoundDigit : BOOL;
+END_VAR
+
+BEGIN
+NETWORK
+TITLE =Read 16-byte consistent block (IB272-287) via DPRD_DAT
+
+      CALL SFC  14 (
+           LADDR                    := W#16#110,
+           RET_VAL                  := #RetVal1,
+           RECORD                   := P#DB4.DBX0.0 BYTE 16);
+
+NETWORK
+TITLE =Read 4-byte consistent block (IB289-292) via DPRD_DAT
+
+      CALL SFC  14 (
+           LADDR                    := W#16#121,
+           RET_VAL                  := #RetVal2,
+           RECORD                   := P#DB4.DBX16.0 BYTE 4);
+
+NETWORK
+TITLE =Validate telegram - check RetVal and fixed markers (decimal point, k, g)
+
+      L     #RetVal1;
+      L     0;
+      <>I ;
+      L     #RetVal2;
+      L     0;
+      <>I ;
+      OW  ;
+      L     "ABC3000A_DB".Byte_7;
+      L     B#16#2E;
+      <>I ;
+      OW  ;
+      L     "ABC3000A_DB".Byte_9;
+      L     B#16#6B;
+      <>I ;
+      OW  ;
+      L     "ABC3000A_DB".Byte_10;
+      L     B#16#67;
+      <>I ;
+      OW  ;
+      =     "GLUE_SCALE_CONTROL_DB".ParseError;
+
+NETWORK
+TITLE =Parse integer part (Byte_0-6, right-justified, space-padded)
+
+      SET ;
+      =     #FoundDigit;
+      L     0;
+      T     #IntPart;
+      CLR ;
+      =     #FoundDigit;
+
+      L     "ABC3000A_DB".Byte_0;
+      L     B#16#20;
+      <>I ;
+      S     #FoundDigit;
+      A     #FoundDigit;
+      JC    DIG0;
+      JU    N0X;
+DIG0: L     "ABC3000A_DB".Byte_0;
+      L     B#16#30;
+      -I  ;
+      T     CharVal;
+      L     #IntPart;
+      L     10;
+      *D  ;
+      L     CharVal;
+      ITD ;
+      +D  ;
+      T     #IntPart;
+N0X:  NOP   0;
+
+      L     "ABC3000A_DB".Byte_1;
+      L     B#16#20;
+      <>I ;
+      S     #FoundDigit;
+      A     #FoundDigit;
+      JC    DIG1;
+      JU    N1X;
+DIG1: L     "ABC3000A_DB".Byte_1;
+      L     B#16#30;
+      -I  ;
+      T     CharVal;
+      L     #IntPart;
+      L     10;
+      *D  ;
+      L     CharVal;
+      ITD ;
+      +D  ;
+      T     #IntPart;
+N1X:  NOP   0;
+
+      L     "ABC3000A_DB".Byte_2;
+      L     B#16#20;
+      <>I ;
+      S     #FoundDigit;
+      A     #FoundDigit;
+      JC    DIG2;
+      JU    N2X;
+DIG2: L     "ABC3000A_DB".Byte_2;
+      L     B#16#30;
+      -I  ;
+      T     CharVal;
+      L     #IntPart;
+      L     10;
+      *D  ;
+      L     CharVal;
+      ITD ;
+      +D  ;
+      T     #IntPart;
+N2X:  NOP   0;
+
+      L     "ABC3000A_DB".Byte_3;
+      L     B#16#20;
+      <>I ;
+      S     #FoundDigit;
+      A     #FoundDigit;
+      JC    DIG3;
+      JU    N3X;
+DIG3: L     "ABC3000A_DB".Byte_3;
+      L     B#16#30;
+      -I  ;
+      T     CharVal;
+      L     #IntPart;
+      L     10;
+      *D  ;
+      L     CharVal;
+      ITD ;
+      +D  ;
+      T     #IntPart;
+N3X:  NOP   0;
+
+      L     "ABC3000A_DB".Byte_4;
+      L     B#16#20;
+      <>I ;
+      S     #FoundDigit;
+      A     #FoundDigit;
+      JC    DIG4;
+      JU    N4X;
+DIG4: L     "ABC3000A_DB".Byte_4;
+      L     B#16#30;
+      -I  ;
+      T     CharVal;
+      L     #IntPart;
+      L     10;
+      *D  ;
+      L     CharVal;
+      ITD ;
+      +D  ;
+      T     #IntPart;
+N4X:  NOP   0;
+
+      L     "ABC3000A_DB".Byte_5;
+      L     B#16#20;
+      <>I ;
+      S     #FoundDigit;
+      A     #FoundDigit;
+      JC    DIG5;
+      JU    N5X;
+DIG5: L     "ABC3000A_DB".Byte_5;
+      L     B#16#30;
+      -I  ;
+      T     CharVal;
+      L     #IntPart;
+      L     10;
+      *D  ;
+      L     CharVal;
+      ITD ;
+      +D  ;
+      T     #IntPart;
+N5X:  NOP   0;
+
+      L     "ABC3000A_DB".Byte_6;
+      L     B#16#30;
+      -I  ;
+      T     CharVal;
+      L     #IntPart;
+      L     10;
+      *D  ;
+      L     CharVal;
+      ITD ;
+      +D  ;
+      T     #IntPart;
+
+NETWORK
+TITLE =Parse decimal digit (Byte_8) and build final REAL weight
+
+      L     "ABC3000A_DB".Byte_8;
+      L     B#16#30;
+      -I  ;
+      T     CharVal;
+      L     CharVal;
+      ITD ;
+      T     #DecDigit;
+
+      L     #IntPart;
+      DTR ;
+      T     "GLUE_SCALE_CONTROL_DB".GrossWeight_Actual;
+
+      L     #DecDigit;
+      DTR ;
+      L     1.000000e+001;
+      /R  ;
+      L     "GLUE_SCALE_CONTROL_DB".GrossWeight_Actual;
+      +R  ;
+      T     "GLUE_SCALE_CONTROL_DB".GrossWeight_Actual;
+
+NETWORK
+TITLE =Skip valve/alarm update if parse failed this scan
+
+      A     "GLUE_SCALE_CONTROL_DB".ParseError;
+      JC    SKIP;
+
+NETWORK
+TITLE =Valve control - open below (Setpoint - Hysteresis), close at/above Setpoint
+
+      A     "GLUE_SCALE_CONTROL_DB".Valve_Open;
+      JC    CHKC;
+
+      L     "GLUE_SCALE_CONTROL_DB".GrossWeight_Actual;
+      L     "GLUE_SCALE_CONTROL_DB".Setpoint_Fill;
+      L     "GLUE_SCALE_CONTROL_DB".Hysteresis;
+      -R  ;
+      <R  ;
+      JC    OPEN;
+      JU    VEND;
+
+CHKC: L     "GLUE_SCALE_CONTROL_DB".GrossWeight_Actual;
+      L     "GLUE_SCALE_CONTROL_DB".Setpoint_Fill;
+      >=R ;
+      JC    CLOS;
+      JU    VEND;
+
+OPEN: SET ;
+      S     "GLUE_SCALE_CONTROL_DB".Valve_Open;
+      JU    VEND;
+
+CLOS: SET ;
+      R     "GLUE_SCALE_CONTROL_DB".Valve_Open;
+
+VEND: NOP   0;
+
+NETWORK
+TITLE =Overfill alarm - latching, set on exceed, no auto-reset here
+
+      L     "GLUE_SCALE_CONTROL_DB".GrossWeight_Actual;
+      L     "GLUE_SCALE_CONTROL_DB".AlarmLimit_Overfill;
+      >R  ;
+      S     "GLUE_SCALE_CONTROL_DB".Alarm_Overfill;
+
+NETWORK
+TITLE =Underfill check - start 5s settle timer on valve close (falling edge)
+
+      A     "GLUE_SCALE_CONTROL_DB".Valve_Open_Prev;
+      AN    "GLUE_SCALE_CONTROL_DB".Valve_Open;
+      L     S5T#5S;
+      SD    T50;
+
+      A     "GLUE_SCALE_CONTROL_DB".Valve_Open;
+      =     "GLUE_SCALE_CONTROL_DB".Valve_Open_Prev;
+
+NETWORK
+TITLE =Underfill alarm - latch if weight still below limit when timer elapses
+
+      A     T50;
+      JCN   SKPU;
+      L     "GLUE_SCALE_CONTROL_DB".GrossWeight_Actual;
+      L     "GLUE_SCALE_CONTROL_DB".AlarmLimit_Underfill;
+      <R  ;
+      S     "GLUE_SCALE_CONTROL_DB".Alarm_Underfill;
+SKPU: NOP   0;
+
+NETWORK
+TITLE =Exit point for parse-error skip
+
+SKIP: NOP   0;
+
+END_FUNCTION
