@@ -1,0 +1,93 @@
+DATA_BLOCK "RUN_DATA_DB"
+TITLE =  DB640
+// v0.5 changes vs v0.4:
+//   - SpareBOOL1 -> Mega_Remote_Reset_Cmd. Pulse to command a remote
+//     Mega reset over RS232: FC120 v1.4 mirrors this into DB20
+//     Control_Byte bit 5 (CONTROL_REMOTE_RESET, was Reserved - see
+//     MEGA V8.0.2), which the Mega latches and uses to stop petting
+//     its WDT, forcing a clean self-reset (~1s, WDTO_1S). No offset
+//     shift - same reused-spare-slot pattern as the v0.3 rename below.
+// v0.4 changes vs v0.3:
+//   - New Web_Velocity_Filtered : REAL. Persistent EMA state for the
+//     Mega OLED's "Actual Velocity" display byte - deliberately
+//     separate from FB610's own Velocity_Out filtering (which drives
+//     AGC control response and must stay untouched). FC120 v1.3 owns
+//     this filter; FC120 is a FUNCTION with no static memory of its
+//     own, so the running EMA value has to live here to survive scan
+//     to scan.
+//
+// v0.3 changes vs v0.2:
+//   - SpareBOOL3 -> Manual_Override_Active, SpareBOOL4 -> Pot_Settled.
+//     Both are live on the wire today (DB30/"STATUS <- MEGA DB".
+//     Extended_Status_Byte bits 2 and 1) but were never bridged into
+//     RUN_DATA_DB - same gap as Pot_hasMoved (bit 0), which was
+//     declared but never written by anything either. FC120 v1.3 now
+//     unpacks all three bits every scan. Reused existing spare slots
+//     rather than growing the struct - no offset shift for anything
+//     else in this DB. Neither new field is consumed downstream yet
+//     (only Pot_hasMoved feeds FB600 today) - wired now so they don't
+//     repeat this same silently-dead-signal bug later.
+VERSION : 0.5
+
+
+  STRUCT 	
+   Machine_Run : BOOL ;	//Web Moving
+   Auto_Mode : BOOL ;	//Auto Mode Flag
+   SystemReset : BOOL ;	//System Reset
+   Interrupt_Pulse : BOOL ;	//Banner to OB40 Pulse Stretch Trigger
+   Mega_Remote_Reset_Cmd : BOOL ;	//Pulse to command Mega RS232 remote reset - see FC120 v1.4
+   SpareBOOL2 : BOOL ;	
+   Manual_Override_Active : BOOL ;	//from MEGA - bench serial-terminal override engaged, DB30.Extended_Status_Byte B
+   AutoActive : BOOL ;	//Auto CheckBack
+   State_None : BOOL ;	//No Pulse Received - FB600
+   State_Clean : BOOL ;	//Clean Pulse Received - FB600
+   State_Flick : BOOL ;	//Flicker Pulses Received - FB600
+   ManOverride : BOOL ;	
+   Pot_Settled : BOOL ;	//from MEGA - inverse of Pot_hasMoved, valid once settled, DB30.Extended_Status_B
+   Pot_hasMoved : BOOL ;	//Operator is Adjusting ! from MEGA
+   Reference_OK : BOOL ;	//10 Clean Consecutive Pulses Flag
+   Alarm : BOOL ;	//No More Pulse Received - FB600
+   SpareBYTE : BYTE ;	
+   AGC_Out : BYTE ;	//Auto Gain Control - Out from FB610
+   Web_Velocity : INT ;	//Tubing Web Velocity from FB610
+   Web_Velocity_Filtered : REAL ;	//Display-only EMA of Web_Velocity, owned by FC120 v1.3 - separate from FB610's c
+   NoChangeScanCount : INT ;	
+   NoChangeScanLimit : INT  := 5;	
+   SpareINT : INT ;	
+   EncoderLive : DINT ;	//Encoder Live
+   BannerEventCount : DINT ;	//Banner EventCount
+   LastEncoderForRun : DINT ;	//Memory
+   EncoderSnapshot : DINT ;	//Encoder Snapshot DINT
+   Exp_Window_Out : DINT ;	//Computed Banner Pulse vs Encoder Pulses
+  END_STRUCT ;	
+BEGIN
+   Machine_Run := FALSE; 
+   Auto_Mode := FALSE; 
+   SystemReset := FALSE; 
+   Interrupt_Pulse := FALSE; 
+   Mega_Remote_Reset_Cmd := FALSE; 
+   SpareBOOL2 := FALSE; 
+   Manual_Override_Active := FALSE; 
+   AutoActive := FALSE; 
+   State_None := FALSE; 
+   State_Clean := FALSE; 
+   State_Flick := FALSE; 
+   ManOverride := FALSE; 
+   Pot_Settled := FALSE; 
+   Pot_hasMoved := FALSE; 
+   Reference_OK := FALSE; 
+   Alarm := FALSE; 
+   SpareBYTE := B#16#0; 
+   AGC_Out := B#16#0; 
+   Web_Velocity := 0; 
+   Web_Velocity_Filtered := 0.000000e+000; 
+   NoChangeScanCount := 0; 
+   NoChangeScanLimit := 5; 
+   SpareINT := 0; 
+   EncoderLive := L#0; 
+   BannerEventCount := L#669113; 
+   LastEncoderForRun := L#0; 
+   EncoderSnapshot := L#0; 
+   Exp_Window_Out := L#0; 
+END_DATA_BLOCK
+

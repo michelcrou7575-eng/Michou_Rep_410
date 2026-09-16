@@ -1,0 +1,895 @@
+FUNCTION_BLOCK "CP340 COMMUNICATION"
+TITLE =410 Seam Monitor - CP340 RS232 Communication
+//==============================================================
+// 410 ROTALINER SEAM MONITOR
+// PLC <-> ARDUINO MEGA RS232 COMMUNICATION
+//
+// Version : 5.2
+// Date    : 2026-08-13
+//
+// v5.2 changes vs v5.1:
+//   - DB20 DBB7-10: ExpWindow shrunk from 4 bytes (ExpWindow_B3..B0)
+//     to 2 (ExpWindow_Hi/Lo, DBB7-8) - see DB20 v5.2 / FC120 v1.2.
+//     DBB9-10 revert to spare Reserved_09/10, so State 1 clears them
+//     again (ExpWindow_Hi/Lo stay uncleared - FC120 supplies them).
+//     TX checksum sum network field references updated to match.
+//   - State 4 RX checksum fix: the sum was double-counting DBB11
+//     (PointA_Scaled was added once via the raw "DB30.DBB 11" read and
+//     again via the named PointA_Scaled field) while never summing
+//     DBB14 (Extended_Status_Byte) at all. Since the Mega's
+//     calculateChecksum() correctly sums bytes 0-14 once each, this
+//     mismatch meant Checksum_OK only ever matched by coincidence
+//     (when DBB11 == DBB14) - the likely cause of spurious
+//     Checksum_Error / State 9 resets. Duplicate PointA_Scaled term
+//     removed; Extended_Status_Byte term added.
+//
+// v5.1 changes vs v5.0:
+//   - DB20 DBB7-10 renamed Reserved_07..Reserved_10 -> ExpWindow_B3..
+//     ExpWindow_B0 (live mirror of "RUN_DATA_DB".Exp_Window_Out,
+//     populated by FC120 v1.2). State 1 no longer clears these 4 bytes
+//     - they're content now, supplied by FC120 before this state next
+//     runs. Checksum sum network updated to reference the new field
+//     names (same bytes, same position, same checksum math either way).
+//     Reserved_11..Reserved_14 still cleared as before.
+//
+// Hardware:
+//   PLC    : Siemens S7-315
+//   CP     : CP340 RS232
+//   Remote : Arduino Mega 2560
+//
+// Communication blocks:
+//   FB401 / DB401 = CP340 SEND
+//   FB402 / DB402 = CP340 RECEIVE
+//
+// Data blocks:
+//   DB20 = PLC -> Mega command telegram
+//   DB30 = Mega -> PLC status telegram
+//   DB31 = PLC communication diagnostics
+//
+// Protocol:
+//   Fixed telegram length = 16 bytes
+//
+// State:
+//   0 = Idle
+//   1 = Build transmit telegram
+//   2 = Send telegram
+//   3 = Wait for reply
+//   4 = Validate reply
+//   9 = Communication error/reset
+//
+// FB203 performs communication only.
+//
+// FB203 does NOT perform:
+//   - Seam evaluation
+//   - AGC decisions
+//   - Encoder processing
+//   - FM350 pulse processing
+//   - Reject logic
+//==============================================================
+VERSION : 5.2
+
+
+VAR_INPUT
+  Start_Exchange : BOOL ;	// Rising edge starts exchange
+  Reset_Diagnostics : BOOL ;	// Rising edge clears DB31 counters
+  CP_LADDR : INT ;	// CP340 logical base address
+  Reply_Timeout : TIME  := T#250MS;	
+END_VAR
+VAR_OUTPUT
+  Busy : BOOL ;	// Exchange active
+  Done : BOOL ;	// Valid exchange one-scan pulse
+  Error : BOOL ;	// Failed exchange one-scan pulse
+  Comm_OK : BOOL ;	// Last exchange was valid
+  Status : WORD ;	// Internal or CP340 status
+END_VAR
+VAR
+  Start_Memory : BOOL ;	
+  Reset_Memory : BOOL ;	
+  State : INT ;	
+  Send_Request : BOOL ;	
+  Send_Reset : BOOL ;	
+  Receive_Reset : BOOL ;	
+  Previous_Comm_OK : BOOL ;	
+  TX_Checksum_Sum : INT ;	
+  RX_Checksum_Sum : INT ;	
+  Reply_Timer : "TON";	
+END_VAR
+VAR_TEMP
+  Start_Pulse : BOOL ;	
+  Reset_Pulse : BOOL ;	
+  Send_Done_Temp : BOOL ;	
+  Send_Error_Temp : BOOL ;	
+  Send_Status_Temp : WORD ;	
+  Receive_NDR_Temp : BOOL ;	
+  Receive_Error_Temp : BOOL ;	
+  Receive_Length_Temp : INT ;	
+  Receive_Status_Temp : WORD ;	
+  Reply_Timer_Q : BOOL ;	
+  Reply_Timer_ET : TIME ;	
+  Checksum_OK : BOOL ;	
+  Version_OK : BOOL ;	
+  Type_OK : BOOL ;	
+  Sequence_OK : BOOL ;	
+END_VAR
+BEGIN
+NETWORK
+TITLE =Generate rising-edge control pulses
+
+      A     #Start_Exchange; 
+      FP    #Start_Memory; 
+      =     #Start_Pulse; 
+
+      A     #Reset_Diagnostics; 
+      FP    #Reset_Memory; 
+      =     #Reset_Pulse; 
+NETWORK
+TITLE =Clear one-scan output pulses
+
+      R     #Done; 
+      R     #Error; 
+NETWORK
+TITLE =Reset DB31 diagnostic counters
+
+      AN    #Reset_Pulse; 
+      JC    REND; 
+
+      L     L#0; 
+      T     "PLC COMMS DIAG".Telegrams_Sent; // Telegrams_Sent
+      T     "PLC COMMS DIAG".Telegrams_Received; // Telegrams_Received
+      T     "PLC COMMS DIAG".Valid_Replies; // Valid_Replies
+      T     "PLC COMMS DIAG".Timeout_Count; // Timeout_Count
+      T     "PLC COMMS DIAG".Checksum_Error_Count; // Checksum_Error_Count
+      T     "PLC COMMS DIAG".Sequence_Error_Count; // Sequence_Error_Count
+      T     "PLC COMMS DIAG".Protocol_Error_Count; // Protocol_Error_Count
+      T     "PLC COMMS DIAG".CP340_Error_Count; // CP340_Error_Count
+      T     "PLC COMMS DIAG".Recovery_Count; // Recovery_Count
+
+      L     W#16#0; 
+      T     "PLC COMMS DIAG".Last_CP340_Status; // Last_CP340_Status
+
+      L     B#16#0; 
+      T     "PLC COMMS DIAG".Last_Sequence_Sent; // Last_Sequence_Sent
+      T     "PLC COMMS DIAG".Last_Sequence_Ack; // Last_Sequence_Ack
+      T     "PLC COMMS DIAG".Last_Command_Sent; // Last_Command_Sent
+      T     "PLC COMMS DIAG".Last_Command_Ack; // Last_Command_Ack
+      T     "PLC COMMS DIAG".Last_TX_Checksum; // Last_TX_Checksum
+      T     "PLC COMMS DIAG".Last_RX_Checksum; // Last_RX_Checksum
+
+      R     "PLC COMMS DIAG".Reply_Valid; // Reply_Valid
+      R     "PLC COMMS DIAG".Timeout_Active; // Timeout_Active
+      R     "PLC COMMS DIAG".Protocol_Error; // Protocol_Error
+      R     "PLC COMMS DIAG".Checksum_Error; // Checksum_Error
+
+      R     "PLC COMMS DIAG".Sequence_Error; // Sequence_Error
+      R     "PLC COMMS DIAG".Version_Error; // Version_Error
+      R     "PLC COMMS DIAG".Telegram_Type_Error; // Telegram_Type_Error
+      R     "PLC COMMS DIAG".CP340_Error; // CP340_Error
+
+REND: NOP   0; 
+NETWORK
+TITLE =CP340 receive block
+
+      CALL "P_REC_RS232" , "P_REC_RS232_DB" (
+           R                        := #Receive_Reset,
+           LADDR                    := #CP_LADDR,
+           DB_NO                    := 30,
+           DBB_NO                   := 0,
+           NDR                      := #Receive_NDR_Temp,
+           ERROR                    := #Receive_Error_Temp,
+           LEN                      := #Receive_Length_Temp,
+           STATUS                   := #Receive_Status_Temp);
+
+NETWORK
+TITLE =CP340 send block
+
+      CALL "P_SEND_RS232" , "P_SEND_RS232_DB" (
+           REQ                      := #Send_Request,
+           R                        := #Send_Reset,
+           LADDR                    := #CP_LADDR,
+           DB_NO                    := 20,
+           DBB_NO                   := 0,
+           LEN                      := 16,
+           DONE                     := #Send_Done_Temp,
+           ERROR                    := #Send_Error_Temp,
+           STATUS                   := #Send_Status_Temp);
+
+NETWORK
+TITLE =Reply timeout timer
+
+      L     #State; 
+      L     3; 
+      ==I   ; 
+      =     "PLC COMMS DIAG".Waiting_For_Reply; // Waiting_For_Reply
+
+      CALL #Reply_Timer (
+           IN                       := "PLC COMMS DIAG".Waiting_For_Reply,
+           PT                       := #Reply_Timeout,
+           Q                        := #Reply_Timer_Q,
+           ET                       := #Reply_Timer_ET);
+
+NETWORK
+TITLE =State dispatcher
+
+      L     #State; 
+      L     0; 
+      ==I   ; 
+      JC    S000; 
+
+      L     #State; 
+      L     1; 
+      ==I   ; 
+      JC    S001; 
+
+      L     #State; 
+      L     2; 
+      ==I   ; 
+      JC    S002; 
+
+      L     #State; 
+      L     3; 
+      ==I   ; 
+      JC    S003; 
+
+      L     #State; 
+      L     4; 
+      ==I   ; 
+      JC    S004; 
+
+      L     #State; 
+      L     9; 
+      ==I   ; 
+      JC    S009; 
+
+// Invalid state: return safely to idle.
+      L     0; 
+      T     #State; 
+      JU    FEND; 
+NETWORK
+TITLE =State 0 - Idle
+
+S000: NOP   0; 
+
+      R     #Busy; 
+
+      R     #Send_Request; 
+      R     #Send_Reset; 
+      R     #Receive_Reset; 
+
+      R     "PLC COMMS DIAG".Send_Busy; // Send_Busy
+      R     "PLC COMMS DIAG".Receive_Busy; // Receive_Busy
+      R     "PLC COMMS DIAG".Waiting_For_Reply; // Waiting_For_Reply
+
+      AN    #Start_Pulse; 
+      JC    FEND; 
+
+      S     #Busy; 
+
+      L     1; 
+      T     #State; 
+
+      JU    FEND; 
+NETWORK
+TITLE =State 1 - Build transmit telegram
+
+S001: NOP   0; 
+
+      R     #Send_Reset; 
+      R     #Receive_Reset; 
+
+//========================================================
+// Increment sequence number
+//========================================================
+
+      L     "PLC -> MEGA DB".Sequence_Number; 
+      L     1; 
+      +I    ; 
+      T     "PLC -> MEGA DB".Sequence_Number; 
+
+
+//========================================================
+// Force protocol identifiers
+//========================================================
+
+      L     B#16#5; 
+      T     "PLC -> MEGA DB".Protocol_Version; // Protocol version
+
+      L     B#16#1; 
+      T     "PLC -> MEGA DB".Telegram_Type; // PLC -> Mega telegram type
+
+
+//========================================================
+// Clear reserved bytes
+// NOTE (v5.2): DBB7-8 (ExpWindow_Hi/Lo) are content, not reserved -
+// populated by FC120 v1.2's "Populate outgoing PLC->Mega telegram
+// content" network before this state next runs. Not cleared here.
+// DBB9-10 reverted to spare Reserved_09/10 in DB20 v5.2 (ExpWindow
+// shrunk from 4 bytes to 2) - back on the clear list along with
+// Reserved_11..14.
+//========================================================
+
+      L     B#16#0; 
+      T     "PLC -> MEGA DB".Reserved_09; 
+      T     "PLC -> MEGA DB".Reserved_10; 
+//   T     "PLC -> MEGA DB".Actual_Velocity
+      T     "PLC -> MEGA DB".Reserved_12; 
+      T     "PLC -> MEGA DB".Reserved_13; 
+      T     "PLC -> MEGA DB".Reserved_14; 
+
+
+//========================================================
+// Additive checksum of DBB0 through DBB14
+//========================================================
+
+      L     0; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".Protocol_Version; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".Telegram_Type; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".Sequence_Number; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".Control_Byte; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".AGC_Command; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".Absolute_Index; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".Step_Size; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".ExpWindow_Hi; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".ExpWindow_Lo; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".Reserved_09; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".Reserved_10; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".Actual_Velocity; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".Reserved_12; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".Reserved_13; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; 
+      L     "PLC -> MEGA DB".Reserved_14; 
+      +I    ; 
+      T     #TX_Checksum_Sum; 
+
+      L     #TX_Checksum_Sum; // Keep only the low checksum byte.
+      L     W#16#FF; 
+      AW    ; 
+      T     "PLC -> MEGA DB".Checksum; 
+
+//========================================================
+// Save transmit diagnostics
+//========================================================
+
+      L     "PLC -> MEGA DB".Sequence_Number; 
+      T     "PLC COMMS DIAG".Last_Sequence_Sent; // Last_Sequence_Sent
+
+      L     "PLC -> MEGA DB".AGC_Command; 
+      T     "PLC COMMS DIAG".Last_Command_Sent; // Last_Command_Sent
+
+      L     "PLC -> MEGA DB".Checksum; 
+      T     "PLC COMMS DIAG".Last_TX_Checksum; // Last_TX_Checksum
+
+
+// Clear current-exchange fault flags.
+
+      R     "PLC COMMS DIAG".Reply_Valid; // Reply_Valid
+      R     "PLC COMMS DIAG".Timeout_Active; // Timeout_Active
+      R     "PLC COMMS DIAG".Protocol_Error; // Protocol_Error
+      R     "PLC COMMS DIAG".Checksum_Error; // Checksum_Error
+
+      R     "PLC COMMS DIAG".Sequence_Error; // Sequence_Error
+      R     "PLC COMMS DIAG".Version_Error; // Version_Error
+      R     "PLC COMMS DIAG".Telegram_Type_Error; // Telegram_Type_Error
+      R     "PLC COMMS DIAG".CP340_Error; // CP340_Error
+
+      S     #Send_Request; // Request transmission.
+
+      L     2; 
+      T     #State; 
+
+      JU    FEND; 
+NETWORK
+TITLE =State 2 - Wait for transmit completion
+
+S002: NOP   0; 
+
+      S     "PLC COMMS DIAG".Send_Busy; // Send_Busy
+
+      A     #Send_Error_Temp; 
+      JC    SE01; 
+
+      AN    #Send_Done_Temp; 
+      JC    FEND; 
+
+
+// P_SEND has completed.
+
+      R     #Send_Request; 
+      R     "PLC COMMS DIAG".Send_Busy; // Send_Busy
+
+      L     "PLC COMMS DIAG".Telegrams_Sent; 
+      L     L#1; 
+      +D    ; 
+      T     "PLC COMMS DIAG".Telegrams_Sent; // Telegrams_Sent
+
+      L     3; 
+      T     #State; 
+
+      JU    FEND; 
+NETWORK
+TITLE =P_SEND communication error
+
+SE01: NOP   0; 
+
+      R     #Send_Request; 
+
+      L     #Send_Status_Temp; 
+      T     #Status; 
+      T     "PLC COMMS DIAG".Last_CP340_Status; 
+
+      S     "PLC COMMS DIAG".CP340_Error; // CP340_Error
+
+      L     "PLC COMMS DIAG".CP340_Error_Count; 
+      L     L#1; 
+      +D    ; 
+      T     "PLC COMMS DIAG".CP340_Error_Count; 
+
+      L     9; 
+      T     #State; 
+
+      JU    FEND; 
+NETWORK
+TITLE =State 3 - Wait for Mega reply
+
+S003: NOP   0; 
+
+      S     "PLC COMMS DIAG".Receive_Busy; // Receive_Busy
+
+      A     #Receive_Error_Temp; 
+      JC    RE01; 
+
+      A     #Receive_NDR_Temp; 
+      JC    RXOK; 
+
+      A     #Reply_Timer_Q; 
+      JC    TOUT; 
+
+      JU    FEND; 
+NETWORK
+TITLE =P_RCV communication error
+
+RE01: NOP   0; 
+
+      L     #Receive_Status_Temp; 
+      T     #Status; 
+      T     "PLC COMMS DIAG".Last_CP340_Status; 
+
+      S     "PLC COMMS DIAG".CP340_Error; // CP340_Error
+
+      L     "PLC COMMS DIAG".CP340_Error_Count; 
+      L     L#1; 
+      +D    ; 
+      T     "PLC COMMS DIAG".CP340_Error_Count; 
+
+      L     9; 
+      T     #State; 
+
+      JU    FEND; 
+NETWORK
+TITLE =Mega reply timeout
+
+TOUT: NOP   0; 
+
+      S     "PLC COMMS DIAG".Timeout_Active; // Timeout_Active
+
+      L     "PLC COMMS DIAG".Timeout_Count; 
+      L     L#1; 
+      +D    ; 
+      T     "PLC COMMS DIAG".Timeout_Count; 
+
+      L     W#16#7001; 
+      T     #Status; 
+
+      L     9; 
+      T     #State; 
+
+      JU    FEND; 
+NETWORK
+TITLE =Mega reply received
+
+RXOK: NOP   0; 
+
+      R     "PLC COMMS DIAG".Receive_Busy; // Receive_Busy
+
+      L     "PLC COMMS DIAG".Telegrams_Received; 
+      L     L#1; 
+      +D    ; 
+      T     "PLC COMMS DIAG".Telegrams_Received; // Telegrams_Received
+//;
+      L     #Receive_Length_Temp; // Telegram must contain exactly 16 bytes.
+      L     16; 
+      ==I   ; 
+      JC    LNOK; 
+
+      S     "PLC COMMS DIAG".Protocol_Error; // Protocol_Error
+//;
+      L     "PLC COMMS DIAG".Protocol_Error_Count; 
+      L     L#1; 
+      +D    ; 
+      T     "PLC COMMS DIAG".Protocol_Error_Count; 
+//;
+      L     W#16#7002; 
+      T     #Status; 
+//;
+      L     9; 
+      T     #State; 
+
+      JU    FEND; 
+
+LNOK: NOP   0; 
+
+      L     4; 
+      T     #State; 
+
+      JU    FEND; 
+NETWORK
+TITLE =State 4 - Calculate received checksum
+
+S004: NOP   0; 
+
+      L     0; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".Protocol_Version; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".Telegram_Type; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".Sequence_Ack; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".Status_Byte; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".Capability_Byte; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".Actual_Index; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".Actual_PWM; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".NSL_Resistance_Hi; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".NSL_Resistance_Lo; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".Baseline_ADC_Hi; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".Baseline_ADC_Lo; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".PointA_Scaled; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".PIR_Status; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; 
+      L     "STATUS <- MEGA DB".Last_Command; 
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+      L     #RX_Checksum_Sum; // NEW v5.2 - DBB14 was never summed; missing term meant
+      L     "STATUS <- MEGA DB".Extended_Status_Byte; // Checksum_OK could only match by coincidence
+      +I    ; 
+      T     #RX_Checksum_Sum; 
+
+
+// Save received checksum.
+
+      L     "STATUS <- MEGA DB".Checksum; 
+      T     "PLC COMMS DIAG".Last_RX_Checksum; 
+
+
+// Compare low byte of calculated checksum.
+
+      L     #RX_Checksum_Sum; 
+      L     W#16#FF; 
+      AW    ; 
+      L     "STATUS <- MEGA DB".Checksum; 
+      ==I   ; 
+      =     #Checksum_OK; 
+
+
+// Verify protocol version.
+
+      L     "STATUS <- MEGA DB".Protocol_Version; 
+      L     B#16#5; 
+      ==I   ; 
+      =     #Version_OK; 
+
+
+// Verify Mega -> PLC telegram type.
+
+      L     "STATUS <- MEGA DB".Telegram_Type; 
+      L     B#16#2; 
+      ==I   ; 
+      =     #Type_OK; 
+
+
+// Verify acknowledged sequence number.
+
+      L     "STATUS <- MEGA DB".Sequence_Ack; 
+      L     "PLC -> MEGA DB".Sequence_Number; 
+      ==I   ; 
+      =     #Sequence_OK; 
+//;
+
+      A     #Checksum_OK; 
+      JC    VERS; 
+
+      S     "PLC COMMS DIAG".Checksum_Error; // Checksum_Error
+//;
+      L     "PLC COMMS DIAG".Checksum_Error_Count; 
+      L     L#1; 
+      +D    ; 
+      T     "PLC COMMS DIAG".Checksum_Error_Count; 
+//;
+      L     W#16#7101; 
+      T     #Status; 
+//;
+      L     9; 
+      T     #State; 
+
+      JU    FEND; 
+NETWORK
+TITLE =Verify protocol version
+
+VERS: NOP   0; 
+
+      A     #Version_OK; 
+      JC    TYPE; 
+
+      S     "PLC COMMS DIAG".Protocol_Error; // Protocol_Error
+      S     "PLC COMMS DIAG".Version_Error; // Version_Error
+//;
+      L     "PLC COMMS DIAG".Protocol_Error_Count; 
+      L     L#1; 
+      +D    ; 
+      T     "PLC COMMS DIAG".Protocol_Error_Count; 
+//;
+      L     W#16#7102; 
+      T     #Status; 
+//;
+      L     9; 
+      T     #State; 
+
+      JU    FEND; 
+NETWORK
+TITLE =Verify telegram type
+
+TYPE: NOP   0; 
+
+      A     #Type_OK; 
+      JC    SEQU; 
+
+      S     "PLC COMMS DIAG".Protocol_Error; // Protocol_Error
+      S     "PLC COMMS DIAG".Telegram_Type_Error; // Telegram_Type_Error
+//;
+      L     "PLC COMMS DIAG".Protocol_Error_Count; 
+      L     L#1; 
+      +D    ; 
+      T     "PLC COMMS DIAG".Protocol_Error_Count; 
+//;
+      L     W#16#7103; 
+      T     #Status; 
+//;
+      L     9; 
+      T     #State; 
+
+      JU    FEND; 
+NETWORK
+TITLE =Verify sequence acknowledgment
+
+SEQU: NOP   0; 
+
+      A     #Sequence_OK; 
+      JC    GOOD; 
+
+      S     "PLC COMMS DIAG".Sequence_Error; // Sequence_Error
+//;
+      L     "PLC COMMS DIAG".Sequence_Error_Count; 
+      L     L#1; 
+      +D    ; 
+      T     "PLC COMMS DIAG".Sequence_Error_Count; 
+//;
+      L     W#16#7104; 
+      T     #Status; 
+//;
+      L     9; 
+      T     #State; 
+
+      JU    FEND; 
+NETWORK
+TITLE =Valid Mega reply
+
+GOOD: NOP   0; 
+
+      S     "PLC COMMS DIAG".Reply_Valid; // Reply_Valid
+
+      R     "PLC COMMS DIAG".Timeout_Active; // Timeout_Active
+      R     "PLC COMMS DIAG".Protocol_Error; // Protocol_Error
+      R     "PLC COMMS DIAG".Checksum_Error; // Checksum_Error
+
+      R     "PLC COMMS DIAG".Sequence_Error; // Sequence_Error
+      R     "PLC COMMS DIAG".Version_Error; // Version_Error
+      R     "PLC COMMS DIAG".Telegram_Type_Error; // Telegram_Type_Error
+      R     "PLC COMMS DIAG".CP340_Error; // CP340_Error
+
+
+// Save acknowledged sequence.
+
+      L     "STATUS <- MEGA DB".Sequence_Ack; 
+      T     "PLC COMMS DIAG".Last_Sequence_Ack; 
+
+
+// Save last executed Mega command.
+
+      L     "STATUS <- MEGA DB".PIR_Status; 
+      T     "PLC COMMS DIAG".Last_Command_Ack; 
+
+
+// Increment valid reply counter.
+
+      L     "PLC COMMS DIAG".Valid_Replies; 
+      L     L#1; 
+      +D    ; 
+      T     "PLC COMMS DIAG".Valid_Replies; 
+
+
+// Count a communication recovery.
+
+      A     #Previous_Comm_OK; 
+      JC    NREC; 
+
+      L     "PLC COMMS DIAG".Recovery_Count; 
+      L     L#1; 
+      +D    ; 
+      T     "PLC COMMS DIAG".Recovery_Count; 
+
+NREC: NOP   0; 
+
+      S     #Comm_OK; 
+      S     #Previous_Comm_OK; 
+      S     "PLC COMMS DIAG".Comm_OK; 
+//;
+      L     W#16#0; 
+      T     #Status; 
+      T     "PLC COMMS DIAG".Last_CP340_Status; 
+//;
+      S     #Done; 
+      R     #Busy; 
+//;
+      L     0; 
+      T     #State; 
+
+      JU    FEND; 
+NETWORK
+TITLE =State 9 - Communication error and CP reset
+
+S009: NOP   0; 
+
+      R     #Send_Request; 
+
+      R     #Comm_OK; 
+      R     #Previous_Comm_OK; 
+      R     "PLC COMMS DIAG".Comm_OK; // Comm_OK
+
+      R     #Busy; 
+
+      R     "PLC COMMS DIAG".Send_Busy; // Send_Busy
+      R     "PLC COMMS DIAG".Receive_Busy; // Receive_Busy
+      R     "PLC COMMS DIAG".Waiting_For_Reply; // Waiting_For_Reply
+
+      S     #Error; 
+
+
+// These reset bits remain stored until FB401 and FB402 execute during the following PLC scan.
+
+      S     #Send_Reset; 
+      S     #Receive_Reset; 
+
+      L     0; 
+      T     #State; 
+
+      JU    FEND; 
+NETWORK
+TITLE =Common diagnostic outputs
+
+FEND: NOP   0; 
+
+      A     #Comm_OK; 
+      =     "PLC COMMS DIAG".Comm_OK; 
+
+      A     #Busy; 
+      =     "PLC COMMS DIAG".Send_Busy; 
+END_FUNCTION_BLOCK
+

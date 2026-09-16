@@ -1,0 +1,43 @@
+FUNCTION "ENCODER" : VOID
+TITLE = FM350-2 Encoder and Banner COUNTER
+VERSION : 0.3
+
+BEGIN
+NETWORK
+TITLE =Read FM350 Channel 0 Encoder Count
+
+      L     PID  264; // FM350-2 channel 0 ACT_CNTV, direct-access DWORD (was 16-bit USER_STAT_WORD0)
+      T     "RUN_DATA_DB".EncoderLive; 
+NETWORK
+TITLE =Open FM350 Channel 0 and 1 Software Gates
+
+      A     "First_Run"; 
+      O     "RUN_DATA_DB".SystemReset; 
+      JCN   END1; 
+
+      S     "FM350_DB".CONTROL_SIGNALS.CTRL_DQ0; 
+      S     "FM350_DB".CONTROL_SIGNALS.CTRL_DQ1; 
+      S     "FM350_DB".CONTROL_SIGNALS.CTRL_DQ2; 
+      S     "FM350_DB".CONTROL_SIGNALS.CTRL_DQ3; 
+      S     "FM350_DB".CONTROL_SIGNALS.CTRL_DQ4; 
+      S     "FM350_DB".CONTROL_SIGNALS.CTRL_DQ5; 
+      S     "FM350_DB".CONTROL_SIGNALS.CTRL_DQ6; 
+      S     "FM350_DB".CONTROL_SIGNALS.CTRL_DQ7; 
+      R     "FM350_DB".CONTROL_SIGNALS.SW_GATE0; 
+
+      L     0; 
+      T     "RUN_DATA_DB".BannerEventCount; 
+
+END1: NOP   0; 
+
+NETWORK
+TITLE =GATE 0 Reset
+
+      AN    "RUN_DATA_DB".SystemReset; 
+      L     S5T#1S; 
+      SD    T    104; 
+//;
+      A     T    104; 
+      S     "FM350_DB".CONTROL_SIGNALS.SW_GATE0; 
+END_FUNCTION
+

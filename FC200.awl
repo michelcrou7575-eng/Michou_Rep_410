@@ -1,0 +1,314 @@
+FUNCTION "CP340_LOOPBACK_TEST" : VOID
+TITLE =CP340 RS232 Loopback Test
+//==============================================================
+// CP340 RS232 Loopback Test
+//
+// Hardware:
+//   CP340 6ES7 340-1AH01-0AE0
+//   DB9 pin 2 connected to DB9 pin 3
+//
+// CP configuration:
+//   ASCII
+//   9600 baud
+//   8 data bits
+//   Even parity
+//   1 stop bit
+//   Fixed message length = 16 bytes
+//   NOTE: matches the live DB20/DB30 link (FB203 / Mega Serial1,
+//   9600 8E1). Previously documented/configured as 19200 here, which
+//   only tests the CP340 talking to itself and does not exercise the
+//   actual baud/parity/framing combination used on the real link -
+//   changed to 9600 8E1 so this test is representative. The CP340
+//   module's port settings must be changed to match in Hardware
+//   Config as well; this file only fixes the documentation - the
+//   baud/parity/stop-bit selection itself lives in HW Config, not in
+//   this FC's STL.
+//
+// Blocks:
+//   FB402 / DB402 = P_SEND
+//   FB401 / DB401 = P_RCV
+//   (Header previously read "FB3/DB101 = P_SEND, FB2/DB102 = P_RCV" -
+//   stale/mismatched against the actual CALL statements below, which
+//   have always used FB402/DB402 and FB401/DB401. Corrected here;
+//   logic itself was never wrong, only the comment.)
+//
+// Test DB:
+//   DB100
+//
+// IMPORTANT:
+//   Change CP_LADDR below to the CP340 logical base address.
+//==============================================================
+VERSION : 0.1
+
+
+VAR_TEMP
+  CP_LADDR : INT ;	
+  Send_Req : BOOL ;	
+  Send_Reset : BOOL ;	
+  Send_Done_Temp : BOOL ;	
+  Send_Error_Temp : BOOL ;	
+  Send_Status_Temp : WORD ;	
+  Receive_Enable : BOOL ;	
+  Receive_Reset : BOOL ;	
+  Receive_NDR_Temp : BOOL ;	
+  Receive_Error_Temp : BOOL ;	
+  Receive_Length_Temp : INT ;	
+  Receive_Status_Temp : WORD ;	
+  Compare_Index : INT ;	
+  Compare_OK : BOOL ;	
+END_VAR
+BEGIN
+NETWORK
+TITLE =CP340 logical base address
+// Replace 256 with the actual logical address from HW Config.
+      L     320; 
+      T     #CP_LADDR; 
+
+NETWORK
+TITLE =Reset test results
+
+      A     "RS232".Reset_Test; 
+      JCN   N001; 
+
+      R     "RS232".Test_OK; // Test_OK
+      R     "RS232".Data_Mismatch; // Data_Mismatch
+      R     "RS232".Send_Error; // Send_Error
+      R     "RS232".Receive_Error; // Receive_Error
+      R     "RS232".Send_Done; // Send_Done
+      R     "RS232".Receive_New_Data; // Receive_New_Data
+      R     "RS232".Communication_OK; // Communication_OK
+
+      R     "RS232".Send_Request; // Send_Request
+      R     "RS232".Send_Busy; // Send_Busy
+
+      L     W#16#0; 
+      T     "RS232".Send_Status; 
+      T     "RS232".Receive_Status; 
+
+      L     0; 
+      T     "RS232".Receive_Length; 
+
+      L     L#0; 
+      T     "RS232".Good_Count; 
+      T     "RS232".Bad_Count; 
+      T     "RS232".Send_Error_Count; 
+      T     "RS232".Receive_Error_Count; 
+
+N001: NOP   0; 
+
+NETWORK
+TITLE =Generate one-scan send request
+// Positive edge of Start_Test.
+// Continuous test starts another send after the previous
+// send/receive operation has completed.
+//
+      A     "RS232".Continuous_Test; 
+      A     "RS232".Receive_New_Data; 
+      AN    "RS232".Send_Busy; 
+      AN    "RS232".Send_Request; 
+      S     "RS232".Send_Request; 
+
+NETWORK
+TITLE =Prepare P_SEND control signals
+
+      A     "RS232".Send_Request; 
+      =     #Send_Req; 
+
+      A     "RS232".Reset_Test; 
+      =     #Send_Reset; 
+
+NETWORK
+TITLE =Send 16 test bytes
+
+      CALL "P_SEND_RS232" , "P_SEND_RS232_DB" (
+           REQ                      := #Send_Req,
+           R                        := #Send_Reset,
+           LADDR                    := #CP_LADDR,
+           DB_NO                    := 100,
+           DBB_NO                   := 24,
+           LEN                      := 16,
+           DONE                     := #Send_Done_Temp,
+           ERROR                    := #Send_Error_Temp,
+           STATUS                   := #Send_Status_Temp);
+
+NETWORK
+TITLE =Save P_SEND status
+
+      A     #Send_Req; 
+      S     "RS232".Send_Busy; // Send_Busy
+      R     "RS232".Send_Request; // Send_Request is one scan only
+
+      A     #Send_Done_Temp; 
+      =     "RS232".Send_Done; 
+
+      A     #Send_Error_Temp; 
+      =     "RS232".Send_Error; 
+
+      L     #Send_Status_Temp; 
+      T     "RS232".Send_Status; 
+
+      A     #Send_Done_Temp; 
+      O     #Send_Error_Temp; 
+      R     "RS232".Send_Busy; 
+
+NETWORK
+TITLE =Count send errors
+
+      A     #Send_Error_Temp; 
+      JCN   N010; 
+
+      L     "RS232".Send_Error_Count; 
+      L     L#1; 
+      +D    ; 
+      T     "RS232".Send_Error_Count; 
+
+N010: NOP   0; 
+
+NETWORK
+TITLE =Enable receiver continuously
+
+      SET   ; 
+      =     #Receive_Enable; 
+
+      A     "RS232".Reset_Test; 
+      =     #Receive_Reset; 
+NETWORK
+TITLE =Receive looped-back telegram
+
+      CALL "P_REC_RS232" , "P_REC_RS232_DB" (
+           EN_R                     := #Receive_Enable,
+           R                        := #Receive_Reset,
+           LADDR                    := #CP_LADDR,
+           DB_NO                    := 100,
+           DBB_NO                   := 40,
+           NDR                      := #Receive_NDR_Temp,
+           ERROR                    := #Receive_Error_Temp,
+           LEN                      := #Receive_Length_Temp,
+           STATUS                   := #Receive_Status_Temp);
+
+NETWORK
+TITLE =Save P_RCV status
+
+      A     #Receive_NDR_Temp; 
+      =     "RS232".Receive_New_Data; 
+
+      A     #Receive_Error_Temp; 
+      =     "RS232".Receive_Error; 
+
+      L     #Receive_Length_Temp; 
+      T     "RS232".Receive_Length; 
+
+      L     #Receive_Status_Temp; 
+      T     "RS232".Receive_Status; 
+
+NETWORK
+TITLE =Count receive errors
+
+      A     #Receive_Error_Temp; 
+      JCN   N020; 
+
+      L     "RS232".Receive_Error_Count; 
+      L     L#1; 
+      +D    ; 
+      T     "RS232".Receive_Error_Count; 
+
+N020: NOP   0; 
+
+NETWORK
+TITLE =Only compare when a complete telegram arrives
+
+      AN    #Receive_NDR_Temp; 
+      JC    END1; 
+
+// First verify received length.
+
+      L     #Receive_Length_Temp; 
+      L     16; 
+      ==I   ; 
+      JCN   BAD1; 
+NETWORK
+TITLE =Compare all 16 bytes
+
+      SET   ; 
+      =     #Compare_OK; 
+
+      L     0; 
+      T     #Compare_Index; 
+
+      LAR1  P#DBX 24.0; // Send_Data[0] - offset into DB100
+      LAR2  P#DBX 40.0; // Receive_Data[0] - offset into DB100
+
+      OPN   "RS232"; // Corrected: was OPN "RS232". Send_Data and
+// Receive_Data both live in DB100 (per DB_NO:=100 in the
+// P_SEND/P_RCV calls below), not in "RS232" (the status/counter
+// DB - Test_OK, Good_Count, etc.). AR1 and AR2 are just offset
+// registers into whichever DB the "DBB" prefix + current OPN
+// resolves to - there's no automatic AR1-to-DB / AR2-to-DI
+// pairing in this addressing mode, so opening the wrong DB here
+// silently corrupted BOTH sides of the comparison (Send_Data via
+// AR1 and Receive_Data via AR2 were both reading "RS232" bytes
+// instead of DB100), meaning Compare_OK/Test_OK/Data_Mismatch
+// have never actually reflected whether the loopback data matched.
+
+CMP1: L     DBB [AR1,P#0.0]; 
+      L     DBB [AR2,P#0.0]; 
+      ==I   ; 
+      JC    CMP2; 
+
+      CLR   ; 
+      =     #Compare_OK; 
+
+CMP2: +AR1  P#1.0; 
+      +AR2  P#1.0; 
+
+      L     #Compare_Index; 
+      L     1; 
+      +I    ; 
+      T     #Compare_Index; 
+
+      L     #Compare_Index; 
+      L     16; 
+      <I    ; 
+      JC    CMP1; 
+
+NETWORK
+TITLE =Process comparison result
+
+      A     #Compare_OK; 
+      JCN   BAD1; 
+
+//--------------------------------------------------------------
+// Successful loopback
+//--------------------------------------------------------------
+
+      S     "RS232".Test_OK; // Test_OK
+      R     "RS232".Data_Mismatch; // Data_Mismatch
+      S     "RS232".Communication_OK; // Communication_OK
+
+      L     "RS232".Good_Count; 
+      L     L#1; 
+      +D    ; 
+      T     "RS232".Good_Count; 
+
+      JU    END1; 
+
+//--------------------------------------------------------------
+// Length error or byte mismatch
+//--------------------------------------------------------------
+
+BAD1: R     "RS232".Test_OK; 
+      S     "RS232".Data_Mismatch; 
+      R     "RS232".Communication_OK; 
+
+      L     "RS232".Bad_Count; 
+      L     L#1; 
+      +D    ; 
+      T     "RS232".Bad_Count; 
+
+NETWORK
+TITLE =End
+
+END1: NOP   0; 
+
+END_FUNCTION
+

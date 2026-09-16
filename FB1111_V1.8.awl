@@ -1,0 +1,323 @@
+FUNCTION_BLOCK "FB1111_LOGGING"
+TITLE = 'Fast 50ms Data Logger with Automated Buffer Reset'
+// v1.8 changes vs v1.7:
+//   - Corrected all DB600 (SEAM_CLASSIFY instance) source read offsets
+//     for FB600 v2.4's new Web_Velocity_Filtered VAR_INPUT (REAL, 4
+//     bytes, inserted after PotMoved/ahead of StNone). VAR_INPUT->
+//     VAR_OUTPUT section boundary moved from byte 14 to byte 18, shifting
+//     every field read after it by +4 bytes. Same class of bug as v1.2's
+//     fix for ExpWindow_Out's addition - a VAR section boundary moving
+//     and silently invalidating hardcoded absolute offsets downstream.
+//     Machine_Run/Auto_Mode/SystemReset/PotMoved (DBX 12.0-12.3) are
+//     UNCHANGED - they sit ahead of the insertion point. Confirmed
+//     2026-09-01 against the online DB600 Address column (screenshot,
+//     post FB600 v2.4 compile):
+//       StNone/StClean/StFlick/Alarm/RefEstablished  14.0-14.4 -> 18.0-18.4
+//       FirstPulse                                   28.0      -> 32.0
+//       ExpectedPositionValid                        58.0      -> 62.0
+//       PreviouSeamWasNone                           64.0      -> 68.0
+//       LastBannerEventCount                         DBD 20    -> DBD 24
+//       LastEncoderPulse (LastPulseEncoder)          DBD 24    -> DBD 28
+//       EXPWindow (ExpWindow)                        DBD 30    -> DBD 34
+//       RefSum (ReferenceSum)                        DBD 34    -> DBD 38
+//       ExpectedNextPulse                            DBD 54    -> DBD 58
+//       StateCode                                    DBW 66    -> DBW 70
+//       BadStreakCount                                DBW 70    -> DBW 74
+//       MaxBadStreak                                 DBW 72    -> DBW 76
+//     Applied to both places these offsets are read: the Auto-arm
+//     trigger network (Alarm bit) and the Cyclic Data Capture network.
+//
+// v1.7 changes vs v1.6:
+//   - NEW static VAR section (this block had none before - only
+//     VAR_INPUT/VAR_TEMP). Adds AlarmMem for edge-detecting DB600's
+//     Alarm output across scans; VAR_TEMP does not persist scan to
+//     scan, so the edge memory has to live here.
+//   - NEW network "Auto-arm on Alarm rising edge" (Option A, Michou's
+//     call 2026-08-31): self-arms a fresh 30s capture the instant
+//     "SEAM_CLASSIFY_DB".Alarm (DBX 14.3) sets, so an intermittent
+//     production fault gets caught without an operator needing to be
+//     standing at the panel with LogActive already armed. Captures
+//     what happens AFTER the fault fires (post-trigger only, no
+//     pre-roll) - if the lead-up turns out to matter too, that's the
+//     circular-buffer rewrite (Option B) that was on the table but not
+//     taken this round.
+//   - Won't re-arm over a capture that's already LogActive (let it run
+//     to completion instead of restarting mid-buffer) or over one that
+//     finished but hasn't been read out yet (LogDone still set, i.e.
+//     Reset_Log hasn't been pulsed) - protects an unretrieved capture
+//     from being silently overwritten by the next Alarm edge.
+//   - NEW capture fields: Machine_Run/Auto_Mode/SystemReset/PotMoved,
+//     read from the same already-open DB600 instance (DBX 12.0-12.3,
+//     confirmed against the online DB600 Address column 2026-08-31) -
+//     written into DB888 v1.3's byte-1 context bits P#1.0-1.3. Added
+//     to distinguish why ReferenceEstablished fails to relatch when
+//     Alarm sticks: web actually stopped, Auto cycling, pot being
+//     touched, or a SystemReset landing mid-fault, vs. a pure
+//     hardware/classifier issue with none of those present.
+//   - Reset network now also clears the new byte-1 context bits.
+//
+// v1.6 changes vs v1.5:
+//   - NEW STRUCT-PADDING TRAP (distinct from the existing WORD/DWORD
+//     field-alignment trap already documented for DB30/DB889): a real
+//     online-DB capture proved STEP7 pads the entire repeating
+//     Buffer[] STRUCT element up to an EVEN total size, not just
+//     individual fields within it. v1.5's record was 25 bytes
+//     (odd) - StateCode/BadStreakCount/MaxBadStreak (all BYTE, no
+//     individual alignment need) landed correctly at 26.0/27.0/28.0,
+//     confirmed against the online Address column - but Buffer[2]
+//     actually starts at 30.0, not 29.0. STEP7 silently inserted one
+//     padding byte after MaxBadStreak so every array element is
+//     word-aligned for the next. v1.5 still stepped the pointer by 25
+//     bytes/record, so every record after the first landed 1 byte
+//     short of where the compiler actually placed it - producing a
+//     cascading misread (StateCode[n] reading what should have been
+//     BadStreakCount[n-1], etc.) that looked like corruption but was
+//     really just a stride-vs-compiled-size mismatch.
+//   - Fix: record stride corrected from 25 to 26 bytes everywhere it's
+//     used (reset-loop pointer step, capture-network address
+//     multiplier). The field-level offsets themselves (P#22.0/23.0/
+//     24.0 relative to each record's base, i.e. absolute DB889
+//     26.0/27.0/28.0) do NOT change - those were already correct.
+//   - DB888 v1.2's DATA_BLOCK source doesn't need editing for this -
+//     the compiler applies this padding regardless of what the source
+//     comments claim the size is. Only this block's hardcoded stride
+//     assumption needed correcting to match what STEP7 actually built.
+//     New total size: 600 x 26 bytes + ~40 overhead = 15640 bytes,
+//     still comfortably under the CPU's 16384-byte limit. v1.3's new
+//     byte-1 fields fit inside padding that was already forced there,
+//     so this total is unchanged by the v1.7 edit.
+//
+// v1.5 changes vs v1.4:
+//   - DB888 v1.2 fixes a real CPU limit violation: target CPU is a
+//     6ES7 315-2AG10-0AB0, max DB size 16KB. v1.1/v1.4's combination
+//     (700 records x 28 bytes + overhead = 19640 bytes) was over by
+//     more than 3KB and would not have compiled. v1.2 changes
+//     StateCode/BadStreakCount/MaxBadStreak from INT to BYTE (all three
+//     are confirmed small-bounded values - see DB888 v1.2 header) and
+//     drops the record count from 700 back to 600, matching DB889's
+//     600-record/30-second window exactly. New total: 600 x 25 bytes +
+//     overhead = 15040 bytes, under budget with ~1.3KB spare.
+//   - Record size 28 -> 25 bytes: reset-loop pointer step (P#28.0 ->
+//     P#25.0), capture-network address multiplier (L 28 -> L 25), and
+//     the loop/range-check record count (700 -> 600) all updated.
+//   - The 3 new fields are now read as BYTE, not INT: L DBW loads the
+//     full 16-bit source value into ACCU1, then T DIB (a byte-sized
+//     destination) naturally takes just ACCU1's low byte - since all
+//     three source values are confirmed to stay within 0-255 (see
+//     DB888 v1.2 header for why), this needed no manual "read the low
+//     byte of the source INT" offset arithmetic; T's destination width
+//     handles the truncation correctly on its own.
+//
+// v1.4 changes vs v1.3:
+//   - DB888 v1.1 added 3 new INT fields (StateCode, BadStreakCount,
+//     MaxBadStreak) to directly test whether MaxBadStreak's self-healing
+//     path is what clears ReferenceEstablished and never lets it
+//     recover - the working theory for the AGC_Trim lock symptom seen
+//     in a correlated DB889 capture. Superseded above by v1.5's BYTE
+//     fields and 600-record count; the new source addresses (DBW 66/
+//     70/72) carry forward unchanged, just read differently now.
+//
+// v1.3 changes vs v1.2:
+//   - DB888 struct actually packs 8 status bools into byte 0, not 5:
+//     StNone/StClean/StFlick/Alarm/RefEstablished (bits 0-4, already
+//     captured) PLUS FirstPulse/ExpectedPositionValid/PreviouSeamWasNone
+//     (bits 5-7, declared in the struct with source comments but never
+//     written by this block - always logged as 0 since Reset zeroes the
+//     whole byte). Now captured.
+//
+// v1.2 changes vs v1.1:
+//   - Corrected all DB600 (SEAM_CLASSIFY instance) source read offsets
+//     for FB600 v2.3's new ExpWindow_Out output (DINT, inserted after
+//     ReferenceEstablished). VAR_OUTPUT->VAR section boundary moved
+//     from byte 16 to byte 20, shifting every static field read after
+//     it by +4 bytes. Also corrects a pre-existing stale offset:
+//     ExpectedNextPulse had already drifted from 40->50 when v2.2 added
+//     SpreadTolerancePct/AcqWindowMin/AcqWindowMax ahead of it in the
+//     VAR section; that drift was never caught. Combined effect: 40->54.
+VERSION : 1.8
+
+
+VAR_INPUT
+  Instance_DB_No : INT  := 600;	// Source FB Instance DB Number (SEAM_CLASSIFY_DB)
+END_VAR
+VAR
+  AlarmMem : BOOL ;	// NEW v1.7 - edge memory, DB600.Alarm rising edge (auto-arm trigger)
+END_VAR
+VAR_TEMP
+  Source_DB : INT ;	
+  ResetLoopCount : INT ;	
+  ResetPointer : DWORD ;	
+END_VAR
+BEGIN
+NETWORK
+TITLE = Buffer Initialization and Reset Sequence
+// Check if Reset_Log command is requested
+      A     "LOGGING_DB".Reset_Log; 
+      JCN   _log; 
+// Reset Control Markers and Pointer Index
+      L     1; 
+      T     "LOGGING_DB".Index; 
+      R     "LOGGING_DB".LogActive; 
+      R     "LOGGING_DB".LogDone; 
+// Initialize Pointer to the first element in the array (Byte address 4.0)
+      L     P#4.0; 
+      T     #ResetPointer; 
+// Open logging DB as DI register to allow absolute pointer access via DIX/DID
+      OPN   DI   888; 
+// Loop through all 600 records to overwrite old data with 0s
+      L     600; 
+_lp:  T     #ResetLoopCount; 
+      LAR1  #ResetPointer; 
+// Clear packed status bits (8 bits: StNone/StClean/StFlick/Alarm/
+// RefEstablished/FirstPulse/ExpectedPositionValid/PreviouSeamWasNone)
+      L     B#16#0; 
+      T     DIB [AR1,P#0.0]; 
+// Clear packed context bits (4 bits: Machine_Run/Auto_Mode/SystemReset/
+// PotMoved) - NEW v1.7, byte 1 was pure padding pre-v1.3/v1.7
+      L     B#16#0; 
+      T     DIB [AR1,P#1.0]; 
+// Clear the 5 DINT fields
+      L     DW#16#0; 
+      T     DID [AR1,P#2.0]; // LastBannerEventCount
+      L     DW#16#0; 
+      T     DID [AR1,P#6.0]; // LastEncoderPulse
+      L     DW#16#0; 
+      T     DID [AR1,P#10.0]; // EXPWindow
+      L     DW#16#0; 
+      T     DID [AR1,P#14.0]; // RefSum
+      L     DW#16#0; 
+      T     DID [AR1,P#18.0]; // ExpectedNextPulse
+// Clear the 3 new BYTE fields - NEW v1.5 (were word writes in v1.4)
+      L     B#16#0; 
+      T     DIB [AR1,P#22.0]; // StateCode
+      L     B#16#0; 
+      T     DIB [AR1,P#23.0]; // BadStreakCount
+      L     B#16#0; 
+      T     DIB [AR1,P#24.0]; // MaxBadStreak
+// Move target pointer to the next structural block (+26 bytes - STEP7 pads DB888's 25-byte STRUCT element to 26 for array word-alignment, see v1.6 header)
+      L     #ResetPointer; 
+      L     P#26.0; 
+      +D    ; 
+      T     #ResetPointer; 
+      L     #ResetLoopCount; 
+      LOOP  _lp; 
+// Clear the user command reset trigger bit when finished
+      R     "LOGGING_DB".Reset_Log; 
+      BEU   ; // End execution block cycle early during reset pass
+
+NETWORK
+TITLE = Auto-arm capture on Alarm rising edge (NEW v1.7 - Option A)
+// Self-arms a fresh 30s capture the instant "SEAM_CLASSIFY_DB".Alarm
+// sets, so an intermittent floor fault gets caught without the
+// operator needing to have LogActive already armed. Post-trigger only
+// (captures what happens AFTER the edge, not before it).
+
+      L     #Instance_DB_No; 
+      T     #Source_DB; 
+      OPN   DB [#Source_DB]; 
+
+      A     DBX   18.3; // Alarm - shifted 14.3->18.3 by FB600 v2.4's Web_Velocity_Filtered insertion
+      FP    #AlarmMem; 
+      JCN   TRIG; 
+
+      A     "LOGGING_DB".LogActive; // Already capturing - let it run to completion
+      O     "LOGGING_DB".LogDone; // Finished but not yet read out - don't stomp it
+      JC    TRIG; 
+
+      L     1; 
+      T     "LOGGING_DB".Index; 
+      S     "LOGGING_DB".LogActive; 
+
+TRIG: NOP   0; 
+
+NETWORK
+TITLE = Cyclic Data Capture Runtime Loop
+
+_log: NOP   0; 
+// Ensure execution is explicitly armed and buffer isn't full
+      A     "LOGGING_DB".LogActive; 
+      AN    "LOGGING_DB".LogDone; 
+      JCN   _end; 
+// Range validation check for write array boundaries
+      L     "LOGGING_DB".Index; 
+      L     600; 
+      >I    ; 
+      JCN   _run; 
+// Stop logger routines safely at memory threshold bounds
+      S     "LOGGING_DB".LogDone; 
+      R     "LOGGING_DB".LogActive; 
+      BEU   ; 
+_run: NOP   0; 
+// Compute structure entry memory alignment offset: (Index - 1) * 26
+// (compiled record size is 26 bytes - STEP7 pads DB888's 25-byte STRUCT up to even for array alignment, see v1.6 header; was 28 in v1.1, 22 pre-v1.1)
+      L     "LOGGING_DB".Index; 
+      L     1; 
+      -I    ; 
+      L     26; 
+      *I    ; 
+      SLD   3; // Convert raw calculated byte count to system Bit-Pointer
+      L     P#4.0; // Base offset modifier for array location inside DB888
+      +D    ; 
+      LAR1  ; // Load resolved address pointer to Register AR1
+// Securely connect to your active source data instance as shared DB
+      L     #Instance_DB_No; 
+      T     #Source_DB; 
+      OPN   DB [#Source_DB]; 
+// Open logging destination as instance DI register for dynamic assignment
+      OPN   DI   888; 
+// Status bits - corrected for FB600 v2.4 compiled DB600 layout (Web_Velocity_Filtered insertion shifted these +4 bytes)
+      A     DBX   18.0; // StNone
+      =     DIX [AR1,P#0.0]; 
+      A     DBX   18.1; // StClean
+      =     DIX [AR1,P#0.1]; 
+      A     DBX   18.2; // StFlick
+      =     DIX [AR1,P#0.2]; 
+      A     DBX   18.3; // Alarm
+      =     DIX [AR1,P#0.3]; 
+      A     DBX   18.4; // ReferenceEstablished
+      =     DIX [AR1,P#0.4]; 
+      A     DBX   32.0; // FirstPulse
+      =     DIX [AR1,P#0.5]; 
+      A     DBX   62.0; // ExpectedPositionValid
+      =     DIX [AR1,P#0.6]; 
+      A     DBX   68.0; // PreviouSeamWasNone
+      =     DIX [AR1,P#0.7]; 
+// Context bits - NEW v1.7, DB600 VAR_INPUTs, confirmed against online
+// Address column 2026-08-31 (Machine_Run 12.0 / Auto_Mode 12.1 /
+// SystemReset 12.2 / PotMoved 12.3)
+      A     DBX   12.0; // Machine_Run
+      =     DIX [AR1,P#1.0]; 
+      A     DBX   12.1; // Auto_Mode
+      =     DIX [AR1,P#1.1]; 
+      A     DBX   12.2; // SystemReset
+      =     DIX [AR1,P#1.2]; 
+      A     DBX   12.3; // PotMoved
+      =     DIX [AR1,P#1.3]; 
+// DINT fields - corrected addresses for FB600 v2.4 compiled DB600 layout
+      L     DBD   24; // LastBannerEventCount
+      T     DID [AR1,P#2.0]; 
+      L     DBD   28; // LastPulseEncoder -> LastEncoderPulse
+      T     DID [AR1,P#6.0]; 
+      L     DBD   34; // ExpWindow -> EXPWindow
+      T     DID [AR1,P#10.0]; 
+      L     DBD   38; // ReferenceSum -> RefSum
+      T     DID [AR1,P#14.0]; 
+      L     DBD   58; // ExpectedNextPulse
+      T     DID [AR1,P#18.0]; 
+// New BYTE-truncated diagnostic fields - NEW v1.5 (INT source, BYTE
+// destination; T naturally keeps only the low byte of the loaded INT -
+// safe here since all three source values are confirmed 0-255, see
+// DB888 v1.2 header for the bound on each)
+      L     DBW   70; // StateCode
+      T     DIB [AR1,P#22.0]; 
+      L     DBW   74; // BadStreakCount
+      T     DIB [AR1,P#23.0]; 
+      L     DBW   76; // MaxBadStreak
+      T     DIB [AR1,P#24.0]; 
+// Step up the tracking counter pointer index value for the next execution
+      L     "LOGGING_DB".Index; 
+      L     1; 
+      +I    ; 
+      T     "LOGGING_DB".Index; 
+_end: NOP   0; 
+END_FUNCTION_BLOCK

@@ -1,0 +1,904 @@
+FUNCTION_BLOCK "MODE_SUPERVISOR"
+TITLE =Man/Auto supervision + AGC step control FB610
+// v1.8 - Cold-start AGC hold on SystemReset (vs v1.7):
+//   - Problem: on a data reset (operator white-switch -> Timer 200 ->
+//     "RUN_DATA_DB".SystemReset - an app-level bit, NOT a CPU restart;
+//     see FC103/FC120), AGC_Out was landing on whatever the persisted
+//     AGC_Trim + velocity-table PreBias_Work happened to compute at
+//     that instant - AGC_Trim is never zeroed anywhere despite the
+//     v1.2 changelog's claim that it's "only ever zero at cold start",
+//     and WebVelocity can read transiently non-zero for the first few
+//     scans, both pulling AGC_Out well away from the DB35 idle preset.
+//   - Fix: new input SystemReset (wired from the same "RUN_DATA_DB".
+//     SystemReset bit FB600 already consumes). New STAT ColdStartHold,
+//     latched TRUE on SystemReset's rising edge (which also zeroes
+//     AGC_Trim), cleared once ReferenceEstablished OR AutoReq goes
+//     true. While held, the "AGC_Out := Bias + Trim" network is
+//     bypassed in favor of AGC_Out := PreBias_Work directly (DB35's
+//     live table value, Trim excluded) - no hardcoded PWM constant,
+//     rides whatever DB35 already says for the current condition.
+//     Normal Bias+Trim tracking resumes unchanged once released.
+//
+// v1.7 - Velocity clamp (vs v1.6):
+//   - New network clamping WebVelocity to +/-9999.0 m/min before the
+//     RND/T-to-INT conversion. RND yields a 32-bit DINT result; T into
+//     the 16-bit WebVelocity_INT/Velocity_Out silently truncates/wraps
+//     for anything beyond +/-32767 - invisible at real production
+//     speeds (0-200 m/min) but hit immediately under hand-drill bench
+//     testing (real encoder now live via FC120's PID264 fix), producing
+//     the "Web_Velocity garbage / FB610 berserk" symptom - wrapped
+//     values feeding both the output and the velocity table lookup
+//     segments below.
+//   - ExpWindow / Exp_Window_Out path checked and confirmed clean:
+//     FB600.ExpWindow_Out (DINT) -> DB640.Exp_Window_Out (DINT) ->
+//     this block's ExpWindow input (DINT, v1.6) - DINT end to end, no
+//     narrowing anywhere. Not the source of the berserk symptom; the
+//     v1.6 encoder-distance re-clock network is unaffected by this fix.
+//
+// v1.6 - Encoder-distance re-clocking for held StNone (vs v1.5):
+//   - Problem: StNone is an FB600 output that holds LEVEL for as long
+//     as a missing-seam condition persists - it isn't guaranteed to
+//     re-pulse. FB610's trim step was edge-triggered (FP #NoneMem), so
+//     it only ever fired once per missing-seam streak, no matter how
+//     long StNone stayed on or how many seam pitches were actually
+//     missed. No further correction happened until StNone finally
+//     cleared and re-asserted.
+//   - Fix: new input ExpWindow (from FB600 v2.3's new ExpWindow_Out -
+//     the live acquired reference pitch, in encoder counts, between
+//     banner pulses). While StNone AND AutoActive stay true, a new
+//     network now re-fires the same trim step every time
+//     LiveEncoderCount has advanced one more ExpWindow past the last
+//     step - i.e. clocked by real physical distance travelled, not by
+//     an edge on a level signal. The original edge-triggered network
+//     is kept as-is (still fires the first correction immediately on
+//     the StNone rising edge) and now also seeds LastTrimEncoderCount
+//     at that same edge so the distance-clock starts counting from the
+//     right position.
+//   - LastTrimEncoderCount advances by ExpWindow (theoretical pitch),
+//     not by jumping to LiveEncoderCount (actual position) - same
+//     "advance from the expected position, not the measured one"
+//     convention FB600 itself uses for ExpectedNextPulse, so a single
+//     large gap self-corrects over a few scans instead of skipping
+//     ahead or firing a burst in one scan.
+//   - Guarded against ExpWindow <= 0 (not yet acquired / stale zero) -
+//     without this guard a zero pitch would make the distance check
+//     true every scan and ratchet AGC_Trim every cycle.
+//   - StFlick is a genuine single-scan blip (confirmed) that clears
+//     itself on the next real pulse, so it keeps its existing edge-
+//     triggered step unchanged - no re-clocking needed there.
+//
+// v1.5 - Fixed broken interpolation math in all 6 segments (vs v1.4):
+//   - Root cause: classic S7-300 STL only has two accumulator levels
+//     (ACCU1/ACCU2). Every segment's math computed (V-V1) first, then
+//     immediately did two more L's to build (O2-O1) - which silently
+//     shifted (V-V1) out of the accumulator stack before the *R that
+//     was supposed to multiply them together. The *R was actually
+//     multiplying (O2-O1) by whatever ACCU2 happened to hold, not by
+//     (V-V1) - so WebVelocity_INT dropped out of the formula entirely
+//     after the first step. Confirmed live: DB35's own
+//     Last_Lookup_Velocity was updating every scan (deadband gate is
+//     fine), but Active_Offset stayed pinned at one wrong constant
+//     across the whole interpolated range, only correct at the
+//     un-interpolated high clamp (straight T from Point_7_Offset, no
+//     math, never touched by the bug).
+//   - Fix: stage every intermediate result through a named REAL temp
+//     (NumA_R, NumB_R, DenV_R) with an explicit T before the next L
+//     pair, so nothing gets pushed out of the accumulator before it's
+//     used. Same formula as before - O1 + (O2-O1)*(V-V1)/(V2-V1) -
+//     just computed in an order that survives the 2-level stack.
+//     Applied identically to all 6 interpolation segments (S002-S007).
+//   - No interface change - inputs/outputs identical to v1.4. Segment
+//     branch logic (JCN chain, clamp networks) untouched, only the
+//     math block inside each interpolation segment changed.
+//
+// v1.4 - DB35 upgraded to V2.0, 7-point absolute Base_PWM table (vs v1.3):
+//   - DB35 "VELOCITY OFFSET TABLE" gained a 7th point (Point_1 now sits
+//     at Velocity=0/Offset=50, the idle value; old Point_1..Point_6
+//     shifted to Point_2..Point_7). Field names on the DB are unchanged
+//     (Point_n_Velocity/Offset, Active_Offset, Last_Lookup_Velocity,
+//     Lookup_Deadband) so this is a pure interpolation-network extension,
+//     no symbolic renames.
+//   - Added segment 7 (new NETWORK, pattern-identical to segments 2-6):
+//     interpolates Point_6..Point_7.
+//   - High-side clamp fallthrough moved from Point_6_Offset to
+//     Point_7_Offset (segment 6's old "and clamp high" role is now
+//     segment 7's).
+//   - Nothing else touched: AGC_Trim, Machine_Run condition, diagnostic
+//     outputs, Encoder_Pulses_Per_Meter, and all v1.1-v1.3 behavior are
+//     unchanged.
+//
+// v1.3 - Interface additions (vs v1.2):
+//   - New input Machine_Run: AutoActive now requires Machine_Run AND
+//     AutoReq AND ReferenceEstablished (previously just the latter two).
+//   - New diagnostic/HMI outputs, all straight passthroughs of existing
+//     internal work variables - no new logic, just visibility:
+//       AutoTrimEnabled := AutoActive (same condition that already
+//         gates the Trim step networks, exposed under a clearer name)
+//       Velocity_Out := WebVelocity_INT
+//       Lookup_PWM_Out := PreBias_Work (clamped table result, not the
+//         raw unclamped Offset_Work)
+//       AGC_Trim_Out := AGC_Trim
+//
+// v1.2 - AGC_Out always tracks velocity Bias, not just while idle (vs v1.1):
+//   - Previously AGC_Out only followed DB35's velocity Pre-Bias while
+//     NOT AutoActive; the instant Auto engaged, AGC_Out froze at
+//     whatever it last held and only moved on a StNone/StFlick edge,
+//     completely velocity-blind for the rest of the Auto session (a
+//     speed change mid-Auto never touched AGC_Out at all). This also
+//     folds in the previously-open "AGC_Out default-hold" item, since
+//     AGC_Out is now recomputed every scan instead of holding between
+//     edges.
+//   - New static AGC_Trim (INT, persists - NOT reset on Auto disengage/
+//     re-engage, only ever zero at cold start) replaces AGC_Commanded
+//     as the seal-quality correction accumulator. Step-up/down networks
+//     now adjust AGC_Trim directly instead of an absolute AGC_Out copy,
+//     and AGC_Trim is clamped to +/-30 so it always acts as a bounded
+//     fine correction on top of Bias - it can never grow large enough
+//     to override or dominate the velocity-based starting point.
+//   - New network (replaces "Force AGC_Out to Pre-Bias whenever not
+//     AutoActive"): AGC_Out := clamp(PreBias_Work + AGC_Trim, 0, 255),
+//     unconditionally, every scan, in both Manual and Auto. Manual
+//     still shows the operator the same number Auto will start from,
+//     now inclusive of whatever Trim correction has already been
+//     learned.
+//   - AGC_Commanded and the "Remember what we just commanded" network
+//     removed - both existed solely to feed the old Work-based step
+//     logic, which no longer reads them (confirmed no other network
+//     referenced AGC_Commanded after this change).
+//   - Encoder_Pulses_Per_Meter corrected 1000 -> 3937.85 (97mm wheel,
+//     1200 PPR) - was defaulting WebVelocity ~3.94x too high, clamping
+//     Active_Offset at the Point_6 high-speed table entry for anything
+//     above ~50 m/min real speed. See DB35/DB640/FC120 for the related
+//     encoder-wiring and DINT-widening fixes that accompany this.
+//
+// v1.1 - Retired pre-NSL32_TABLE leftover (vs v1.0):
+//   - Removed AGC_OperatorPreset input and the Diff/Deadband override-
+//     detection networks built on it. AGC_OperatorPreset was never
+//     wired to anything real anywhere in the project (confirmed by
+//     project-wide search) - it sat at its DB640 default of 0 forever,
+//     which meant Diff := |AGC_Commanded - 0| tripped ManOverride TRUE
+//     (and forced AutoActive FALSE) the instant AGC_Commanded exceeded
+//     Deadband=5 - i.e. almost immediately, in any real operating
+//     condition. This was a leftover from before DB35/PreBias existed
+//     and is not part of the current workflow.
+//   - Current intended workflow (confirmed): idle PWM comes from DB35
+//     by web velocity (PreBias); operator settles the physical pot
+//     near that bias watching Mega-side feedback; operator then
+//     engages Auto; RS232 relays the AGC PWM to the Mega. No PLC-side
+//     "did the operator nudge something" comparison is needed for
+//     this - that detection, if wanted, belongs on the Mega side
+//     (Point B pot -> A6), which is a separate signal path.
+//   - Normal auto engage simplified to AutoReq AND ReferenceEstablished
+//     (AN ManOverride term dropped - nothing sets ManOverride anymore).
+//   - PreBias_Work is now DB35.Active_Offset directly (was
+//     AGC_OperatorPreset + Active_Offset) - DB35's trial values (90,
+//     55, 40, 36, 34, 33) are already absolute idle-PWM targets by
+//     velocity, not deltas on top of another value.
+//   - ManOverride output KEPT (per decision - repurpose later) but is
+//     now forced FALSE every scan by this block since nothing else
+//     sets it. Reserved for a future pass wiring it to the Mega's own
+//     DB30.Extended_Status_Byte Bit 2 (Manual_Override_Active) as a
+//     real interlock on AutoActive - that's a genuine, already-
+//     populated signal, unlike the retired AGC_OperatorPreset input.
+//   - "Reset override - selector cycled off then on" network left in
+//     place unchanged - currently a no-op (nothing latches ManOverride
+//     TRUE yet), but becomes meaningful again once the Mega bit is
+//     wired in: cycling AutoReq off/on will then clear a latched
+//     override, requiring operator acknowledgment.
+VERSION : 1.8
+
+
+VAR_INPUT
+  Machine_Run : BOOL ;	// AutoActive requires this
+  AutoReq : BOOL ;	
+  StNone : BOOL ;	
+  StFlick : BOOL ;	
+  ReferenceEstablished : BOOL ;	//AutoActive requires this too
+  LiveEncoderCount : DINT ;	//raw FM350 count, same signal FB600 uses
+  Cycle_Time_ms : INT ;	//OB1_PREV_CYCLE, wired from FC120
+  ExpWindow : DINT ;	// NEW v1.6 - live reference pitch from FB600 v2.3 ExpWindow_Out, encoder counts
+  SystemReset : BOOL ;	// NEW v1.8 - "RUN_DATA_DB".SystemReset, same app-level data-reset bit FB600 alre
+END_VAR
+VAR_OUTPUT
+  AutoActive : BOOL ;	// TRUE when RUN + AutoReq + reference are valid
+  ManOverride : BOOL ;	// Reserved - currently forced FALSE
+  AutoTrimEnabled : BOOL ;	// TRUE whenever automatic trim is allowed
+  Velocity_Out : INT ;	// Filtered actual web velocity [m/min]
+  Lookup_PWM_Out : INT ;	// Interpolated absolute PWM from velocity table
+  AGC_Trim_Out : INT ;	// Signed correction from StNone / StFlick
+  AGC_Out : BYTE ;	// Final clamped PWM sent to the Mega
+END_VAR
+VAR
+  AGC_Trim : INT ;	// persists across Auto on/off, clamped +/-30
+  AutoReqMem : BOOL ;	
+  NoneMem : BOOL ;	
+  FlickMem : BOOL ;	
+  Step : INT  := 2;	
+  Work : INT ;	// --- Velocity / Pre-Bias ---
+  LastEncoderCount : DINT ;	
+  DeltaCounts : DINT ;	
+  DeltaCounts_R : REAL ;	
+  CycleTime_R : REAL ;	
+  Numerator_R : REAL ;	
+  Denominator_R : REAL ;	
+  RawVelocity : REAL ;	
+  WebVelocity : REAL ;	
+  WebVelocity_INT : INT ;	
+  FilterGain : REAL  := 2.000000e-001;	
+  Encoder_Pulses_Per_Meter : REAL  := 4.000000e+003;	// 95.5 mm wheel, 1200 PPR - calibrated 2026-08-05
+  Encoder_Pulley_Ratio : REAL  := 1.001000e+000;	
+  VelDiff : INT ;	
+  Offset_Work : INT ;	
+  SegV1_R : REAL ;	
+  SegV2_R : REAL ;	
+  SegO1_R : REAL ;	
+  SegO2_R : REAL ;	
+  SegResult_R : REAL ;	
+  NumA_R : REAL ;	// (V - V1), staged so it survives past the (O2-O1) loads
+  NumB_R : REAL ;	// (O2 - O1) * (V - V1), staged so it survives past the (V2-V1) loads
+  DenV_R : REAL ;	// (V2 - V1)
+  PreBias_Work : INT ;	
+  LastTrimEncoderCount : DINT ;	// NEW v1.6 - encoder position at the last StNone trim step
+  TrimClockDelta : DINT ;	// NEW v1.6 - scratch: LiveEncoderCount - LastTrimEncoderCount
+  ColdStartHold : BOOL  := TRUE;	// NEW v1.8 - while TRUE, AGC_Out := PreBias_Work directly (Trim excluded); set o
+  SysResetMem : BOOL ;	// NEW v1.8 - edge-detect memory for SystemReset input (named distinct from FB600
+END_VAR
+BEGIN
+NETWORK
+TITLE =ManOverride reserved - forced FALSE until Mega bit is wired in
+
+      CLR   ; 
+      =     #ManOverride; 
+
+NETWORK
+TITLE =Normal auto engage - requires Machine_Run, AutoReq, and a locked
+
+      A     #Machine_Run; 
+      A     #AutoReq; 
+      A     #ReferenceEstablished; 
+      =     #AutoActive; 
+
+      A     #AutoActive; 
+      =     #AutoTrimEnabled; 
+
+NETWORK
+TITLE =Velocity - compute delta encoder counts since last scan
+
+      L     #LiveEncoderCount; 
+      L     #LastEncoderCount; 
+      -D    ; 
+      T     #DeltaCounts; 
+      L     #LiveEncoderCount; 
+      T     #LastEncoderCount; 
+
+NETWORK
+TITLE =Velocity - raw m/min + exponential filter (skipped if cycle time
+
+      L     #Cycle_Time_ms; 
+      L     0; 
+      >I    ; 
+      JCN   V010; 
+
+      L     #DeltaCounts; 
+      DTR   ; 
+      T     #DeltaCounts_R; 
+      L     #Cycle_Time_ms; 
+      ITD   ; 
+      DTR   ; 
+      T     #CycleTime_R; 
+
+      L     #DeltaCounts_R; 
+      L     6.000000e+004; 
+      *R    ; 
+      T     #Numerator_R; 
+      L     #Encoder_Pulses_Per_Meter; 
+      L     #CycleTime_R; 
+      *R    ; 
+      T     #Denominator_R; 
+      L     #Numerator_R; 
+      L     #Denominator_R; 
+      /R    ; 
+      L     #Encoder_Pulley_Ratio; 
+      *R    ; 
+      T     #RawVelocity; 
+
+// WebVelocity := WebVelocity + (RawVelocity - WebVelocity) * FilterGain
+      L     #RawVelocity; 
+      L     #WebVelocity; 
+      -R    ; 
+      L     #FilterGain; 
+      *R    ; 
+      L     #WebVelocity; 
+      +R    ; 
+      T     #WebVelocity; 
+V010: NOP   0; 
+
+NETWORK
+TITLE =Velocity - clamp before rounding to INT (NEW v1.7)
+// RND converts the REAL WebVelocity to a 32-bit DINT result, but the
+// network below writes it straight into 16-bit INT variables
+// (WebVelocity_INT, Velocity_Out) via plain T - no range check, so any
+// value beyond +/-32767 silently wraps instead of erroring. Real
+// production speeds (0-200 m/min per DB35) never approach that limit,
+// but bench/hand-drill testing can produce raw velocities far outside
+// any real operating range, and the exponential filter above has no
+// clamp of its own - it just chases whatever RawVelocity throws at it.
+// Clamping the persisted WebVelocity itself (not just a local copy)
+// also matters: without this, a single huge spike gets baked into the
+// filter's own memory and takes many scans to decay back out even
+// after the input returns to normal.
+      L     #WebVelocity; 
+      L     9.999000e+003; // +9999.0 m/min ceiling
+      >R    ; 
+      JCN   VCL1; 
+      L     9.999000e+003; 
+      T     #WebVelocity; 
+VCL1: L     #WebVelocity; 
+      L     -9.999000e+003; // -9999.0 m/min floor
+      <R    ; 
+      JCN   VCL2; 
+      L     -9.999000e+003; 
+      T     #WebVelocity; 
+VCL2: NOP   0; 
+
+NETWORK
+TITLE =Velocity - round to INT for deadband/table comparisons
+
+      L     #WebVelocity; 
+      RND   ; 
+      T     #WebVelocity_INT; 
+      T     #Velocity_Out; 
+
+NETWORK
+TITLE =Velocity offset table - deadband gate (skip re-lookup on small m
+
+      L     #WebVelocity_INT; 
+      L     "VELOCITY OFFSET TABLE".Last_Lookup_Velocity; 
+      -I    ; 
+      T     #VelDiff; 
+      L     #VelDiff; 
+      L     0; 
+      <I    ; 
+      JCN   V020; 
+      L     0; 
+      L     #VelDiff; 
+      -I    ; 
+      T     #VelDiff; 
+V020: NOP   0; 
+
+      L     #VelDiff; 
+      L     "VELOCITY OFFSET TABLE".Lookup_Deadband; 
+      <I    ; 
+      JC    V030; 
+
+NETWORK
+TITLE =Velocity offset table - segment 1 (clamp low, V <= Point_1)
+
+      L     #WebVelocity_INT; 
+      L     "VELOCITY OFFSET TABLE".Point_1_Velocity; 
+      <=I   ; 
+      JCN   S001; 
+      L     "VELOCITY OFFSET TABLE".Point_1_Offset; 
+      T     #Offset_Work; 
+      JU    S900; 
+S001: NOP   0; 
+
+NETWORK
+TITLE =Velocity offset table - segment 2 (interpolate Point_1..Point_2)
+
+      L     #WebVelocity_INT; 
+      L     "VELOCITY OFFSET TABLE".Point_2_Velocity; 
+      <=I   ; 
+      JCN   S002; 
+      L     "VELOCITY OFFSET TABLE".Point_1_Velocity; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegV1_R; 
+      L     "VELOCITY OFFSET TABLE".Point_2_Velocity; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegV2_R; 
+      L     "VELOCITY OFFSET TABLE".Point_1_Offset; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegO1_R; 
+      L     "VELOCITY OFFSET TABLE".Point_2_Offset; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegO2_R; 
+
+      L     #WebVelocity_INT; 
+      ITD   ; 
+      DTR   ; 
+      L     #SegV1_R; 
+      -R    ; // (V - V1)
+      T     #NumA_R; 
+
+      L     #SegO2_R; 
+      L     #SegO1_R; 
+      -R    ; // (O2 - O1)
+      L     #NumA_R; 
+      *R    ; // (O2-O1)*(V-V1)
+      T     #NumB_R; 
+
+      L     #SegV2_R; 
+      L     #SegV1_R; 
+      -R    ; // (V2-V1)
+      T     #DenV_R; 
+
+      L     #NumB_R; 
+      L     #DenV_R; 
+      /R    ; 
+      L     #SegO1_R; 
+      +R    ; // O1 + interpolated fraction
+      RND   ; 
+      T     #Offset_Work; 
+      JU    S900; 
+S002: NOP   0; 
+
+NETWORK
+TITLE =Velocity offset table - segment 3 (interpolate Point_2..Point_3)
+
+      L     #WebVelocity_INT; 
+      L     "VELOCITY OFFSET TABLE".Point_3_Velocity; 
+      <=I   ; 
+      JCN   S003; 
+      L     "VELOCITY OFFSET TABLE".Point_2_Velocity; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegV1_R; 
+      L     "VELOCITY OFFSET TABLE".Point_3_Velocity; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegV2_R; 
+      L     "VELOCITY OFFSET TABLE".Point_2_Offset; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegO1_R; 
+      L     "VELOCITY OFFSET TABLE".Point_3_Offset; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegO2_R; 
+
+      L     #WebVelocity_INT; 
+      ITD   ; 
+      DTR   ; 
+      L     #SegV1_R; 
+      -R    ; 
+      T     #NumA_R; 
+
+      L     #SegO2_R; 
+      L     #SegO1_R; 
+      -R    ; 
+      L     #NumA_R; 
+      *R    ; 
+      T     #NumB_R; 
+
+      L     #SegV2_R; 
+      L     #SegV1_R; 
+      -R    ; 
+      T     #DenV_R; 
+
+      L     #NumB_R; 
+      L     #DenV_R; 
+      /R    ; 
+      L     #SegO1_R; 
+      +R    ; 
+      RND   ; 
+      T     #Offset_Work; 
+      JU    S900; 
+S003: NOP   0; 
+
+NETWORK
+TITLE =Velocity offset table - segment 4 (interpolate Point_3..Point_4)
+
+      L     #WebVelocity_INT; 
+      L     "VELOCITY OFFSET TABLE".Point_4_Velocity; 
+      <=I   ; 
+      JCN   S004; 
+      L     "VELOCITY OFFSET TABLE".Point_3_Velocity; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegV1_R; 
+      L     "VELOCITY OFFSET TABLE".Point_4_Velocity; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegV2_R; 
+      L     "VELOCITY OFFSET TABLE".Point_3_Offset; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegO1_R; 
+      L     "VELOCITY OFFSET TABLE".Point_4_Offset; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegO2_R; 
+
+      L     #WebVelocity_INT; 
+      ITD   ; 
+      DTR   ; 
+      L     #SegV1_R; 
+      -R    ; 
+      T     #NumA_R; 
+
+      L     #SegO2_R; 
+      L     #SegO1_R; 
+      -R    ; 
+      L     #NumA_R; 
+      *R    ; 
+      T     #NumB_R; 
+
+      L     #SegV2_R; 
+      L     #SegV1_R; 
+      -R    ; 
+      T     #DenV_R; 
+
+      L     #NumB_R; 
+      L     #DenV_R; 
+      /R    ; 
+      L     #SegO1_R; 
+      +R    ; 
+      RND   ; 
+      T     #Offset_Work; 
+      JU    S900; 
+S004: NOP   0; 
+
+NETWORK
+TITLE =Velocity offset table - segment 5 (interpolate Point_4..Point_5)
+
+      L     #WebVelocity_INT; 
+      L     "VELOCITY OFFSET TABLE".Point_5_Velocity; 
+      <=I   ; 
+      JCN   S005; 
+      L     "VELOCITY OFFSET TABLE".Point_4_Velocity; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegV1_R; 
+      L     "VELOCITY OFFSET TABLE".Point_5_Velocity; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegV2_R; 
+      L     "VELOCITY OFFSET TABLE".Point_4_Offset; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegO1_R; 
+      L     "VELOCITY OFFSET TABLE".Point_5_Offset; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegO2_R; 
+
+      L     #WebVelocity_INT; 
+      ITD   ; 
+      DTR   ; 
+      L     #SegV1_R; 
+      -R    ; 
+      T     #NumA_R; 
+
+      L     #SegO2_R; 
+      L     #SegO1_R; 
+      -R    ; 
+      L     #NumA_R; 
+      *R    ; 
+      T     #NumB_R; 
+
+      L     #SegV2_R; 
+      L     #SegV1_R; 
+      -R    ; 
+      T     #DenV_R; 
+
+      L     #NumB_R; 
+      L     #DenV_R; 
+      /R    ; 
+      L     #SegO1_R; 
+      +R    ; 
+      RND   ; 
+      T     #Offset_Work; 
+      JU    S900; 
+S005: NOP   0; 
+
+NETWORK
+TITLE =Velocity offset table - segment 6 (interpolate Point_5..Point_6)
+
+      L     #WebVelocity_INT; 
+      L     "VELOCITY OFFSET TABLE".Point_6_Velocity; 
+      <=I   ; 
+      JCN   S006; 
+      L     "VELOCITY OFFSET TABLE".Point_5_Velocity; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegV1_R; 
+      L     "VELOCITY OFFSET TABLE".Point_6_Velocity; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegV2_R; 
+      L     "VELOCITY OFFSET TABLE".Point_5_Offset; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegO1_R; 
+      L     "VELOCITY OFFSET TABLE".Point_6_Offset; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegO2_R; 
+
+      L     #WebVelocity_INT; 
+      ITD   ; 
+      DTR   ; 
+      L     #SegV1_R; 
+      -R    ; 
+      T     #NumA_R; 
+
+      L     #SegO2_R; 
+      L     #SegO1_R; 
+      -R    ; 
+      L     #NumA_R; 
+      *R    ; 
+      T     #NumB_R; 
+
+      L     #SegV2_R; 
+      L     #SegV1_R; 
+      -R    ; 
+      T     #DenV_R; 
+
+      L     #NumB_R; 
+      L     #DenV_R; 
+      /R    ; 
+      L     #SegO1_R; 
+      +R    ; 
+      RND   ; 
+      T     #Offset_Work; 
+      JU    S900; 
+S006: NOP   0; 
+
+NETWORK
+TITLE =Velocity offset table - segment 7 (interpolate Point_6..Point_7,
+
+      L     #WebVelocity_INT; 
+      L     "VELOCITY OFFSET TABLE".Point_7_Velocity; 
+      <=I   ; 
+      JCN   S007; 
+      L     "VELOCITY OFFSET TABLE".Point_6_Velocity; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegV1_R; 
+      L     "VELOCITY OFFSET TABLE".Point_7_Velocity; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegV2_R; 
+      L     "VELOCITY OFFSET TABLE".Point_6_Offset; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegO1_R; 
+      L     "VELOCITY OFFSET TABLE".Point_7_Offset; 
+      ITD   ; 
+      DTR   ; 
+      T     #SegO2_R; 
+
+      L     #WebVelocity_INT; 
+      ITD   ; 
+      DTR   ; 
+      L     #SegV1_R; 
+      -R    ; 
+      T     #NumA_R; 
+
+      L     #SegO2_R; 
+      L     #SegO1_R; 
+      -R    ; 
+      L     #NumA_R; 
+      *R    ; 
+      T     #NumB_R; 
+
+      L     #SegV2_R; 
+      L     #SegV1_R; 
+      -R    ; 
+      T     #DenV_R; 
+
+      L     #NumB_R; 
+      L     #DenV_R; 
+      /R    ; 
+      L     #SegO1_R; 
+      +R    ; 
+      RND   ; 
+      T     #Offset_Work; 
+      JU    S900; 
+S007: NOP   0; 
+
+// Fell through every segment test -> V > Point_7.Velocity -> clamp high
+      L     "VELOCITY OFFSET TABLE".Point_7_Offset; 
+      T     #Offset_Work; 
+
+S900: NOP   0; 
+
+NETWORK
+TITLE =Velocity offset table - commit new Active_Offset and lookup mark
+
+      L     #Offset_Work; 
+      T     "VELOCITY OFFSET TABLE".Active_Offset; 
+      L     #WebVelocity_INT; 
+      T     "VELOCITY OFFSET TABLE".Last_Lookup_Velocity; 
+V030: NOP   0; 
+
+NETWORK
+TITLE =Pre-Bias := DB35 Active_Offset, clamped 0..255
+
+      L     "VELOCITY OFFSET TABLE".Active_Offset; 
+      T     #PreBias_Work; 
+
+      L     #PreBias_Work; 
+      L     0; 
+      >=I   ; 
+      JC    P001; 
+      L     0; 
+      T     #PreBias_Work; 
+P001: NOP   0; 
+
+      L     #PreBias_Work; 
+      L     255; 
+      <=I   ; 
+      JC    P002; 
+      L     255; 
+      T     #PreBias_Work; 
+P002: L     #PreBias_Work; 
+      T     #Lookup_PWM_Out; 
+
+NETWORK
+TITLE =AGC step up on StNone rising edge, Auto only - also seeds the en
+
+      A     #StNone; 
+      FP    #NoneMem; 
+      JCN   L005; 
+      A     #AutoActive; 
+      JCN   L005; 
+
+      L     #LiveEncoderCount; 
+      T     #LastTrimEncoderCount; 
+
+      L     #AGC_Trim; 
+      L     #Step; 
+      +I    ; 
+      T     #AGC_Trim; 
+      L     #AGC_Trim; 
+      L     30; 
+      <=I   ; 
+      JC    L005; 
+      L     30; 
+      T     #AGC_Trim; 
+L005: NOP   0; 
+
+NETWORK
+TITLE =AGC step up while StNone holds level - re-clock every ExpWindow 
+// StNone only edges once per missing-seam streak (FB600 re-declares it
+// level, not pulsed) - this re-fires the same correction every time the
+// web has physically travelled one more seam pitch while StNone is
+// still held and Auto is still active. Clocked by real encoder
+// distance, not by an FB600 re-declaration edge that isn't guaranteed
+// to repeat.
+      A     #StNone; 
+      JCN   L013; 
+      A     #AutoActive; 
+      JCN   L013; 
+
+// Guard: a zero/not-yet-acquired pitch would make the check below
+// true every scan and ratchet AGC_Trim every cycle.
+      L     #ExpWindow; 
+      L     0; 
+      <=D   ; 
+      JC    L013; 
+
+      L     #LiveEncoderCount; 
+      L     #LastTrimEncoderCount; 
+      -D    ; 
+      T     #TrimClockDelta; 
+
+      L     #TrimClockDelta; 
+      L     #ExpWindow; 
+      <D    ; 
+      JC    L013; 
+
+      L     #AGC_Trim; 
+      L     #Step; 
+      +I    ; 
+      T     #AGC_Trim; 
+      L     #AGC_Trim; 
+      L     30; 
+      <=I   ; 
+      JC    L012; 
+      L     30; 
+      T     #AGC_Trim; 
+
+// Advance by the theoretical pitch, not to the live position - same
+// convention FB600 uses for ExpectedNextPulse, so a large gap
+// self-corrects over a few scans instead of skipping ahead in one jump.
+L012: L     #LastTrimEncoderCount; 
+      L     #ExpWindow; 
+      +D    ; 
+      T     #LastTrimEncoderCount; 
+
+L013: NOP   0; 
+
+NETWORK
+TITLE =AGC step down on StFlick rising edge, Auto only - adjusts Trim, 
+
+      A     #StFlick; 
+      FP    #FlickMem; 
+      JCN   L007; 
+      A     #AutoActive; 
+      JCN   L007; 
+      L     #AGC_Trim; 
+      L     #Step; 
+      -I    ; 
+      T     #AGC_Trim; 
+      L     #AGC_Trim; 
+      L     -30; 
+      >=I   ; 
+      JC    L007; 
+      L     -30; 
+      T     #AGC_Trim; 
+L007: NOP   0; 
+
+NETWORK
+TITLE =Cold-start hold - latch on SystemReset rising edge, also zero AG
+
+      A     #SystemReset; 
+      FP    #SysResetMem; 
+      JCN   L020; 
+      SET   ; 
+      =     #ColdStartHold; 
+      L     0; 
+      T     #AGC_Trim; 
+L020: NOP   0; 
+
+NETWORK
+TITLE =Cold-start hold - release once ReferenceEstablished or AutoReq g
+
+      A     #ReferenceEstablished; 
+      O     #AutoReq; 
+      JCN   L021; 
+      CLR   ; 
+      =     #ColdStartHold; 
+L021: NOP   0; 
+
+NETWORK
+TITLE =AGC_Out := velocity Bias + persisted Trim, clamped 0..255 (every
+
+      L     #AGC_Trim; 
+      T     #AGC_Trim_Out; 
+
+      A     #ColdStartHold; 
+      JCN   L022; 
+      L     #PreBias_Work; 
+      T     #AGC_Out; 
+      JU    L023; 
+L022: NOP   0; 
+
+      L     #PreBias_Work; 
+      L     #AGC_Trim; 
+      +I    ; 
+      T     #Work; 
+
+      L     #Work; 
+      L     0; 
+      >=I   ; 
+      JC    L009; 
+      L     0; 
+      T     #Work; 
+L009: L     #Work; 
+      L     255; 
+      <=I   ; 
+      JC    L010; 
+      L     255; 
+      T     #Work; 
+L010: L     #Work; 
+      T     #AGC_Out; 
+L023: NOP   0; 
+
+NETWORK
+TITLE =Reset override - selector cycled off then on (reserved - no-op u
+
+      A     #AutoReq; 
+      FN    #AutoReqMem; 
+      JCN   L004; 
+      CLR   ; 
+      =     #ManOverride; 
+L004: NOP   0; 
+
+END_FUNCTION_BLOCK
+

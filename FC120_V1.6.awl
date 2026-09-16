@@ -1,0 +1,489 @@
+FUNCTION "BANNER AUTO-TRIM" : VOID
+TITLE =Cyclic seam classify (FB600) + AGC step control (FB610) (OB35) F
+// v1.6 (vs v1.5):
+//   - "Smooth Web_Velocity for Mega OLED display": gated on Machine_Run.
+//     The EMA ran unconditionally, so at standstill the filtered value
+//     only asymptotically decayed - the Mega LCD could hold a lingering
+//     nonzero velocity reading well after the web actually stopped.
+//     Now: Machine_Run TRUE runs the EMA unchanged; Machine_Run FALSE
+//     hard-resets Web_Velocity_Filtered to 0.0 and Actual_Velocity to 0
+//     directly, no decay tail. New labels VSTOP/VDONE.
+// v1.5 (vs v1.4/v1.3 label catch-up - see below):
+//   - Version label consolidation, no new logic beyond v1.4.
+// v1.4 (vs v1.3):
+//   - "Populate outgoing PLC->Mega telegram content": new network
+//     mirrors "RUN_DATA_DB".Mega_Remote_Reset_Cmd (DB640 v0.5) into
+//     Control_Byte bit 5 (B#16#20), same OW-into-CONTROL_BYTE_WORK
+//     pattern as Machine_Run/Auto_Mode. Was Reserved on the wire -
+//     see DB20 v5.3 comment and MEGA V8.0.2 CONTROL_REMOTE_RESET.
+// v1.3 (vs v1.2):
+//   - Version label catch-up: the "Refresh Pot/Override status from
+//     MEGA" network (Pot_Settled/Manual_Override_Active unpack) was
+//     already present in this file but the version header was never
+//     bumped when it was added, even though DB640 v0.3's changelog
+//     already refers to "FC120 v1.3" as the block that unpacks those
+//     bits. Aligning the label now rather than leaving the mismatch.
+//     Also cleaned up dead/duplicate commented-out lines left over
+//     from that edit (stray duplicate "=" assignment lines) while in
+//     here - no logic change to that network.
+//   - New network, appended after "Call FB610": smooths
+//     "RUN_DATA_DB".Web_Velocity into Web_Velocity_Filtered (own REAL
+//     static in RUN_DATA_DB, since this FC has no memory of its own)
+//     via a slower, display-only EMA - deliberately independent of
+//     FB610's own control-loop filter. Rounded/clamped 0-255 and
+//     written to "PLC -> MEGA DB".Actual_Velocity (DB20 v5.3 DBB11).
+// v1.2 (vs v1.1):
+//   - New network, appended to "Populate outgoing PLC->Mega telegram
+//     content" right after the Absolute_Index write: decomposes
+//     "RUN_DATA_DB".Exp_Window_Out (DINT) into DB20's 4 new
+//     ExpWindow_B3..B0 bytes (was Reserved_07..10 - see DB20 v5.1 and
+//     FB203 v5.1) so the live reference pitch can be shown on the Mega
+//     OLED. Explicit shift/mask per byte, not a struct overlay -
+//     consistent with this project's established wire-protocol DB
+//     discipline (byte-safe, no reliance on STRUCT layout/alignment).
+VERSION : 1.6
+
+
+VAR_TEMP
+  LIVE_ENCODER_I : INT ;	
+  LIVE_ENCODER_D : DINT ;	
+  ENCODER_SNAPSHOT : DINT ;	
+  BANNER_EVENT : DINT ;	
+  EXP_WINDOW : DINT ;	
+  VELOCITY_FILTERED : DINT ;	
+  LAST_CYCLETIME : INT ;	
+  CONTROL_BYTE_WORK : BYTE ;	// scratch for assembling "PLC -> MEGA DB".Control_Byte bit-by-bit
+  AUTO_ACTIVE : BOOL ;	
+  ALARM : BOOL ;	
+  SYSTEM_ENABLE : BOOL ;	
+  REFRESH_PULSE : BOOL ;	
+  AUTOTRIM_ENABLE : BOOL ;	
+  LOOKUP_PWM : INT ;	
+  ACG_TRIMOUT : INT ;	
+  EXPWINDOW_CLAMPED : WORD ;	// NEW v1.2, retyped v1.5 - Exp_Window_Out clamped bit pattern before wire packin
+  VEL_RAW_R : REAL ;	// NEW v1.3 - Web_Velocity (INT) widened to REAL for the display EMA
+  VEL_DELTA_R : REAL ;	// NEW v1.3 - staged (Raw - OldFiltered) before the gain multiply, 2-ACCU safe
+  VEL_FILTERED_R : REAL ;	// NEW v1.3 - new Web_Velocity_Filtered value this scan
+  VEL_ROUNDED_D : DINT ;	// NEW v1.3 - RND'd filtered value before the 0-255 clamp
+END_VAR
+BEGIN
+NETWORK
+TITLE =Power Control
+
+      A     "M 6.3"; 
+      FP    "FP 219.5"; 
+      =     #REFRESH_PULSE; 
+
+      A     #REFRESH_PULSE; 
+      JCN   REF1; 
+      A(    ; 
+      O     "INPUTS DB".Seam_Ctrl_SEL_L; 
+      O     "INPUTS DB".Seam_Ctrl_SEL_R; 
+      )     ; 
+      S     "OUTPUTS DB".Seam_Ctrl_Power; 
+//;
+      AN    "INPUTS DB".Seam_Ctrl_SEL_L; 
+      AN    "INPUTS DB".Seam_Ctrl_SEL_R; 
+      L     S5T#2S; 
+      SD    T    102; 
+//;
+      A     T    102; 
+      R     "OUTPUTS DB".Seam_Ctrl_Power; 
+      R     "SYSTEM_ENABLED"; 
+
+REF1: NOP   0; 
+
+      A     "INPUTS DB".Seam_Ctrl_SEL_L; 
+      S     "SYSTEM_ENABLED"; 
+//;
+      A     "INPUTS DB".Seam_Ctrl_SEL_R; 
+      A     "RUN_DATA_DB".SystemReset; 
+      S     "SYSTEM_ENABLED"; 
+NETWORK
+TITLE =+R76 Connections
+
+      A     "INPUTS DB".Seam_Ctrl_WHT_SW; 
+      =     "OUTPUTS DB".Seam_Ctrl_Wht_SW_Lamp; 
+      L     S5T#1S; 
+      SD    "Timer 200"; 
+//;
+      A     "Timer 200"; 
+      =     "RUN_DATA_DB".SystemReset; 
+      R     "OUTPUTS DB".Seam_Ctrl_Wht_SW_Lamp; 
+      =     "RUN_DATA_DB".Mega_Remote_Reset_Cmd; 
+//;
+      A     "INPUTS DB".Seam_Ctrl_SEL_L; 
+      =     "OUTPUTS DB".Seam_Ctrl_Select; 
+//;
+      A     "INPUTS DB".Seam_Ctrl_GRN_SW; 
+      FP    "FP 219.2"; 
+      X     "RUN_DATA_DB".Auto_Mode; 
+      =     "RUN_DATA_DB".Auto_Mode; 
+//;
+      A     "RUN_DATA_DB".Alarm; 
+      JC    ALRM; 
+
+      A     "RUN_DATA_DB".State_Flick; 
+      =     "OUTPUTS DB".Seam_Ctrl_Red_Top_Lamp; 
+//;
+      A     "RUN_DATA_DB".Reference_OK; 
+      A     "RUN_DATA_DB".Machine_Run; 
+      =     "OUTPUTS DB".Seam_Ctrl_Blu_Top_Lamp; 
+//;
+      A     "RUN_DATA_DB".Auto_Mode; 
+      =     "OUTPUTS DB".Seam_Ctrl_Grn_SW_Lamp; 
+//;
+      A     "INPUTS DB".Seam_Ctrl_GRN_SW; 
+      AN    "RUN_DATA_DB".Auto_Mode; 
+      O     "RUN_DATA_DB".SystemReset; 
+      R     "OUTPUTS DB".Seam_Ctrl_Grn_SW_Lamp; 
+//;
+      A     "RUN_DATA_DB".State_Clean; 
+      =     "OUTPUTS DB".Seam_Ctrl_Grn_Top_Lamp; 
+      JU    NOAL; 
+
+ALRM: A     "M 6.2"; 
+      =     "OUTPUTS DB".Seam_Ctrl_Red_Top_Lamp; 
+      =     "OUTPUTS DB".Seam_Ctrl_Blu_Top_Lamp; 
+      =     "OUTPUTS DB".Seam_Ctrl_Grn_Top_Lamp; 
+
+NOAL: A     "RUN_DATA_DB".Interrupt_Pulse; 
+      L     S5T#70MS; 
+      SF    T    100; 
+//;
+      A     T    100; 
+      =     "FM350_DB".CONTROL_SIGNALS.SET_DQ3; 
+      R     "RUN_DATA_DB".Interrupt_Pulse; 
+NETWORK
+TITLE =Refresh live encoder count from FM350-2 (NEW v1.1)
+// FM350-2 channel 0 ACT_CNTV direct-access DWORD, module base 256
+// (PIW 256...271, confirmed live) + offset 8 = 264.
+//  Called here every OB35 50ms cycle.
+      L     PID  264; 
+      T     "RUN_DATA_DB".EncoderLive; 
+NETWORK
+TITLE =Switch Read 
+
+      A     #REFRESH_PULSE; 
+      JCN   REF4; 
+
+      A     "INPUTS DB".Seam_Ctrl_SEL_L; 
+      =     "RUN_DATA_DB".Sensor_Select_A; 
+//;
+      A     "INPUTS DB".Seam_Ctrl_SEL_R; 
+      =     "RUN_DATA_DB".Sensor_Select_B; 
+
+REF4: NOP   0; 
+NETWORK
+TITLE =Refresh Pot/Override status from MEGA      OPN   "STATUS <- MEGA
+//    A     DBX   14.0                  // Pot_Moved - not yet wired,
+//    =     "RUN_DATA_DB".Pot_hasMoved  // see DB640 v0.3 changelog
+//    A     DBX   14.1                  // Pot_Settled
+//     =     "RUN_DATA_DB".Pot_Settled
+//
+//     A     DBX   14.2                  // Manual_Override_Active
+//     =     "RUN_DATA_DB".Manual_Override_Active
+
+
+NETWORK
+TITLE =Machine Run - Detect
+//CALCULATE MOVEMENT SINCE LAST CPU SCAN
+      L     50; // OB35 50mS
+      T     #LAST_CYCLETIME; 
+//;
+      L     "RUN_DATA_DB".EncoderLive; // Now live - FM350-2 PID264, refreshed above
+      L     "RUN_DATA_DB".LastEncoderForRun; // Load previous scan's encoder value
+      -D    ; // Subtract them (Current - Previous) - 32-bit DINT result
+      JM    NEGA; // <--- CORRECT S7 INSTRUCTION (Jump if Minus)
+      JU    CHCK; // If positive, proceed to check threshold
+
+NEGA: NEGD  ; // Absolute value, 32-bit
+
+CHCK: L     3; // <-- NOISE FILTER: Ignore jitter <= 3 counts
+      <=D   ; 
+      JC    NOCH; // YES: Machine is practically stationary. Jump to NOCH.============================================================
+
+      SET   ; 
+      =     "RUN_DATA_DB".Machine_Run; //  ENCODER MOVED (Machine is running)
+      L     L#0; 
+      T     "RUN_DATA_DB".NoChangeScanCount; // Reset the stall timer/counter
+      JU    SAVE; // Skip to the end to save data
+
+NOCH: L     "RUN_DATA_DB".NoChangeScanCount; //  ENCODER DID NOT MOVE (Evaluate Stall Timer)
+      L     "RUN_DATA_DB".NoChangeScanLimit; // (Your preset limit of 20 scans)
+      >=I   ; 
+      JC    STOP; // If stalled for 20 scans, jump to stop logic
+
+      L     "RUN_DATA_DB".NoChangeScanCount; // Increment the stall counter
+      L     1; 
+      +I    ; 
+      T     "RUN_DATA_DB".NoChangeScanCount; 
+      JU    SAVE; 
+
+STOP: CLR   ; // MACHINE TIMEOUT / STALLED
+      =     "RUN_DATA_DB".Machine_Run; // Turn OFF the Machine_Run bit
+
+      L     "RUN_DATA_DB".NoChangeScanLimit; // Keep the counter saturated at maximum
+      T     "RUN_DATA_DB".NoChangeScanCount; 
+
+SAVE: L     "RUN_DATA_DB".EncoderLive; //  SAVE CURRENT VALUES FOR NEXT SCAN
+      T     "RUN_DATA_DB".LastEncoderForRun; // Save 32-bit history for the next cycle
+NETWORK
+TITLE =Call FB600 Seam Classify : Clean, Flickers, None  
+
+      L     "RUN_DATA_DB".EncoderLive; 
+      T     #LIVE_ENCODER_D; 
+//;
+      L     "RUN_DATA_DB".EncoderSnapshot; 
+      T     #ENCODER_SNAPSHOT; 
+//;
+      L     "RUN_DATA_DB".BannerEventCount; 
+      T     #BANNER_EVENT; 
+//;
+      A     "RUN_DATA_DB".SystemReset; 
+      R     "RUN_DATA_DB".Auto_Mode; 
+//;
+      A     "SYSTEM_ENABLED"; 
+      JCN   DISA; 
+
+      CALL "SEAM_CLASSIFY" , "SEAM_CLASSIFY_DB" (
+           EncoderSnapshot          := #ENCODER_SNAPSHOT,
+           LiveEncoderCount         := #LIVE_ENCODER_D,
+           BannerEventCount         := #BANNER_EVENT,
+           Machine_Run              := "RUN_DATA_DB".Machine_Run,
+           Auto_Mode                := "RUN_DATA_DB".Auto_Mode,
+           SystemReset              := "RUN_DATA_DB".SystemReset,
+           PotMoved                 := "RUN_DATA_DB".Pot_hasMoved,
+           StNone                   := "RUN_DATA_DB".State_None,
+           StClean                  := "RUN_DATA_DB".State_Clean,
+           StFlick                  := "RUN_DATA_DB".State_Flick,
+           Alarm                    := "RUN_DATA_DB".Alarm,
+           ReferenceEstablished     := "RUN_DATA_DB".Reference_OK,
+           ExpWindow_Out            := #EXP_WINDOW);
+
+      L     #EXP_WINDOW; 
+      T     "RUN_DATA_DB".Exp_Window_Out; 
+
+DISA: NOP   0; 
+NETWORK
+TITLE =Call FB610 MEGA PWM Control
+
+      CALL "MODE_SUPERVISOR" , "MODE_SUPERVISOR_DB" (
+           Machine_Run              := "RUN_DATA_DB".Machine_Run,
+           AutoReq                  := "RUN_DATA_DB".Auto_Mode,
+           StNone                   := "RUN_DATA_DB".State_None,
+           StFlick                  := "RUN_DATA_DB".State_Flick,
+           ReferenceEstablished     := "RUN_DATA_DB".Reference_OK,
+           LiveEncoderCount         := #LIVE_ENCODER_D,
+           Cycle_Time_ms            := #LAST_CYCLETIME,
+           ExpWindow                := #EXP_WINDOW,
+           SystemReset              := "RUN_DATA_DB".SystemReset,
+           AutoActive               := #AUTO_ACTIVE,
+           AutoTrimEnabled          := #AUTOTRIM_ENABLE,
+           Velocity_Out             := "RUN_DATA_DB".Web_Velocity,
+           Lookup_PWM_Out           := #LOOKUP_PWM,
+           AGC_Trim_Out             := #ACG_TRIMOUT,
+           AGC_Out                  := "RUN_DATA_DB".AGC_Out);
+
+NETWORK
+TITLE =Smooth Web_Velocity for Mega LCD display (NEW v1.3, standstill r
+// Separate, slower EMA than FB610's own Velocity_Out filter - this one
+// exists purely to steady the digit on the LCD and must never feed
+// back into AGC control. Gain 0.1 (vs FB610's 0.2) - display-only, so
+// biased toward smoother over responsive. State (Web_Velocity_Filtered)
+// lives in RUN_DATA_DB since this FC has no static memory of its own.
+// Staged through named REAL temps per instruction - S7-300 STL has
+// only 2 ACCU levels, so chained L/L/arithmetic without staging
+// silently drops intermediate results (see FB610 v1.2 changelog for
+// the same class of bug).
+// v1.6 - gated on Machine_Run: the EMA below only asymptotes toward
+// standstill, it never truly reaches it, so a hard reset branch skips
+// the EMA and zeroes both the filter state and the wire byte directly
+// the moment the machine is detected stopped (see Machine Run - Detect
+// network above for Machine_Run itself).
+      A     "RUN_DATA_DB".Machine_Run; 
+      JCN   VSTP; // Machine stopped - hard reset, skip EMA
+
+      L     "RUN_DATA_DB".Web_Velocity; // INT -> REAL
+      ITD   ; 
+      DTR   ; 
+      T     #VEL_RAW_R; 
+//;
+      L     #VEL_RAW_R; // VEL_DELTA_R := Raw - OldFiltered
+      L     "RUN_DATA_DB".Web_Velocity_Filtered; 
+      -R    ; 
+      T     #VEL_DELTA_R; 
+//;
+      L     #VEL_DELTA_R; // VEL_DELTA_R := VEL_DELTA_R * 0.1 (gain)
+      L     1.000000e-001; 
+      *R    ; 
+      T     #VEL_DELTA_R; 
+//;
+      L     "RUN_DATA_DB".Web_Velocity_Filtered; // VEL_FILTERED_R := OldFiltered + VEL_DELTA_R
+      L     #VEL_DELTA_R; 
+      +R    ; 
+      T     #VEL_FILTERED_R; 
+      T     "RUN_DATA_DB".Web_Velocity_Filtered; // persist for next scan
+//;
+      L     #VEL_FILTERED_R; // round to DINT for the clamp/byte-pack below
+      RND   ; 
+      T     #VEL_ROUNDED_D; 
+//;
+      L     #VEL_ROUNDED_D; // clamp low: nothing below 0 goes on the wire
+      L     0; 
+      >D    ; 
+      JC    VC01; 
+      L     0; 
+      T     #VEL_ROUNDED_D; 
+
+VC01: L     #VEL_ROUNDED_D; // clamp high: defensive 255 ceiling (BYTE range;
+      L     255; // confirmed on the real machine this never exceeds ~200)
+      <D    ; 
+      JC    VC02; 
+      L     255; 
+      T     #VEL_ROUNDED_D; 
+
+VC02: L     #VEL_ROUNDED_D; // T to a BYTE target auto-truncates to the low byte
+      T     "PLC -> MEGA DB".Actual_Velocity; 
+      JU    VDNE; 
+
+VSTP: L     0.000000e+000; // hard reset - no EMA decay tail at standstill
+      T     "RUN_DATA_DB".Web_Velocity_Filtered; 
+      L     0; 
+      T     "PLC -> MEGA DB".Actual_Velocity; 
+
+VDNE: NOP   0; 
+
+NETWORK
+TITLE =Populate outgoing PLC -> MEGA telegram content
+// Control_Byte: bit0=Machine_Run, bit1=Auto_Mode have live sources.
+// Bits 2 (Reset_Mega_Diagnostics), 3 (PIR_Enable), 4 (OLED_Wake)
+      L     B#16#0; 
+      T     #CONTROL_BYTE_WORK; 
+//;
+      A     "RUN_DATA_DB".Machine_Run; 
+      JCN   M001; 
+
+      L     #CONTROL_BYTE_WORK; 
+      L     B#16#1; 
+      OW    ; 
+      T     #CONTROL_BYTE_WORK; 
+
+M001: NOP   0; 
+
+      A     "RUN_DATA_DB".Auto_Mode; 
+      JCN   M002; 
+
+      L     #CONTROL_BYTE_WORK; 
+      L     B#16#2; 
+      OW    ; 
+      T     #CONTROL_BYTE_WORK; 
+
+M002: NOP   0; 
+
+      A     "RUN_DATA_DB".Mega_Remote_Reset_Cmd; 
+      JCN   M003; 
+
+      L     #CONTROL_BYTE_WORK; 
+      L     B#16#20; 
+      OW    ; 
+      T     #CONTROL_BYTE_WORK; 
+
+M003: NOP   0; 
+
+      A     "RUN_DATA_DB".Sensor_Select_A; 
+      JCN   M004; 
+      L     #CONTROL_BYTE_WORK; 
+      L     B#16#40; 
+      OW    ; 
+      T     #CONTROL_BYTE_WORK; 
+
+M004: NOP   0; 
+
+      A     "RUN_DATA_DB".Sensor_Select_B; 
+      JCN   M005; 
+      L     #CONTROL_BYTE_WORK; 
+      L     B#16#80; 
+      OW    ; 
+      T     #CONTROL_BYTE_WORK; 
+
+M005: NOP   0; 
+
+      L     #CONTROL_BYTE_WORK; 
+      T     "PLC -> MEGA DB".Control_Byte; 
+//;
+      L     B#16#3; // AGC_Command: always 3 (AbsolutePwm
+      T     "PLC -> MEGA DB".AGC_Command; 
+//;
+      L     "RUN_DATA_DB".AGC_Out; 
+      T     "PLC -> MEGA DB".Absolute_Index; 
+//;
+      L     "RUN_DATA_DB".Exp_Window_Out; 
+      L     L#32767; 
+      >D    ; 
+      JCN   EW01; 
+      L     W#16#7FFF; 
+      T     #EXPWINDOW_CLAMPED; 
+      JU    EW03; 
+
+EW01: L     "RUN_DATA_DB".Exp_Window_Out; 
+      L     L#-32768; 
+      <D    ; 
+      JCN   EW02; 
+      L     W#16#8000; 
+      T     #EXPWINDOW_CLAMPED; 
+      JU    EW03; 
+
+EW02: L     "RUN_DATA_DB".Exp_Window_Out; 
+      T     #EXPWINDOW_CLAMPED; // in range: low word of the DINT is the correct 16-bit bit pattern
+
+EW03: L     #EXPWINDOW_CLAMPED; 
+      SRW   8; // shift high byte into low byte position
+      T     "PLC -> MEGA DB".ExpWindow_Hi; 
+
+      L     #EXPWINDOW_CLAMPED; 
+      T     "PLC -> MEGA DB".ExpWindow_Lo; // T to a BYTE target auto-truncates to the low byte 
+//;
+      A     "SYSTEM_RESET"; 
+      R     "SYSTEM_RESET"; 
+      R     "AUTO"; 
+//;
+      CLR   ; 
+      =     "FORCE_PULSE"; 
+      =     "FORCE_FLICK"; 
+//;
+      L     "SCAN CYCLETIME"; 
+      T     #LAST_CYCLETIME; 
+NETWORK
+TITLE =Logging
+
+      A     "DB600_LOG"; 
+      JCN   LOG1; 
+
+      CALL "FB1111_LOGGING" , "LOGGING_INSTANCE_DB" (
+           Instance_DB_No           := 600);
+
+      AN    "RUN_BOTH"; 
+      R     "DB610_LOG"; 
+
+LOG1: A     "DB610_LOG"; 
+      JCN   LOG2; 
+
+      CALL "FB1112_AGC_LOGGING" , "AGC_LOGGING" (
+           Instance_DB_No           := 610);
+      AN    "RUN_BOTH"; 
+      A     "DB600_LOG"; 
+
+LOG2: NOP   0; 
+      A     "RUN_BOTH"; 
+      S     "DB600_LOG"; 
+      S     "DB610_LOG"; 
+//;
+      A     "RUN_BOTH"; 
+      A     "START_BOTH"; 
+      S     "LOGGING_DB".LogActive; 
+      S     "AGC_LOG_DB".LogActive; 
+      R     "START_BOTH"; 
+
+END_FUNCTION
+

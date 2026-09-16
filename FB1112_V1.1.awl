@@ -1,0 +1,163 @@
+FUNCTION_BLOCK "FB1112_AGC_LOGGING"
+TITLE = 'Fast 50ms AGC/Velocity/Trim-Diagnostic Data Logger with Automated Buffer Reset'
+// v1.1 - Rebuilt against DB889 v2.0 (16-byte record) and FB610 V1.7's
+//   actual compiled offsets (vs v1.0):
+//
+//   RECORD SIZE: v1.0 was written against DB889 v1.0's 8-byte record
+//   (AutoActive/RefEstablished bits + AGC_Out byte, then 3 INTs).
+//   DB889 v2.0 is 16 bytes/record (adds StNone, StFlick, NoneMem,
+//   FlickMem status bits, plus ExpWindow and LastTrimEncoderCount
+//   DINTs). Every place v1.0 hardcoded "8" as the record stride -
+//   the reset-loop pointer step (P#8.0) and the capture-network
+//   address multiplier (L 8; *I;) - is now 16. The reset network only
+//   cleared 8 of the 16 bytes; it now clears all 16 (two DWORD clears
+//   added for the new DINT fields, word clears kept for the rest).
+//
+//   SOURCE OFFSETS: v1.0's DB610 reads (DBX8.0, DBB16, DBW10/12/14)
+//   were the pre-ExpWindow addresses - the same stale offsets DB889's
+//   own v1.0 header comments carried, predating ExpWindow's addition
+//   to FB610 VAR_INPUT at v1.6 (which pushed the whole VAR_OUTPUT
+//   section 4 bytes later). Only DBX0.4 (ReferenceEstablished, a
+//   VAR_INPUT bit ahead of the shift) was already correct. Corrected
+//   against FB610 V1.7's actual compiled interface order:
+//     AutoActive            DBX8.0  -> DBX12.0
+//     AGC_Out                DBB16  -> DBB20
+//     Velocity_Out            DBW10 -> DBW14
+//     Lookup_PWM_Out          DBW12 -> DBW16
+//     AGC_Trim_Out            DBW14 -> DBW18
+//   New reads added for the fuller field set (see DB889 v2.0 header
+//   for how each address was derived):
+//     StNone                  DBX0.2   (VAR_INPUT bit)
+//     StFlick                 DBX0.3   (VAR_INPUT bit)
+//     NoneMem                 DBX24.1  (internal static)
+//     FlickMem                DBX24.2  (internal static)
+//     ExpWindow               DBD8     (VAR_INPUT DINT)
+//     LastTrimEncoderCount    DBD110   (internal static DINT)
+//   As always, re-verify all of the above against the online DB
+//   Address column before relying on them - hardcoded absolute offsets
+//   silently drift any time FB610's VAR sections are edited.
+//
+// v1.0 - original 8-byte-record logger. Superseded above.
+VERSION : 1.1
+VAR_INPUT
+  Instance_DB_No : INT  := 610;	// Source FB Instance DB Number (MODE_SUPERVISOR_DB)
+END_VAR
+VAR_TEMP
+  Source_DB : INT ;	
+  ResetLoopCount : INT ;	
+  ResetPointer : DWORD ;	
+END_VAR
+BEGIN
+NETWORK
+TITLE = Buffer Initialization and Reset Sequence
+// Check if Reset_Log command is requested
+      A     "AGC_LOG_DB".Reset_Log; 
+      JCN   _log; 
+// Reset Control Markers and Pointer Index
+      L     1; 
+      T     "AGC_LOG_DB".Index; 
+      R     "AGC_LOG_DB".LogActive; 
+      R     "AGC_LOG_DB".LogDone; 
+// Initialize Pointer to the first element in the array (Byte address 4.0)
+      L     P#4.0; 
+      T     #ResetPointer; 
+// Open logging DB as DI register to allow absolute pointer access via DIX/DIW
+      OPN   DI   889; 
+// Loop through all 600 records to overwrite old data with 0s
+      L     600; 
+_lp:  T     #ResetLoopCount; 
+      LAR1  #ResetPointer; 
+// Clear all 16 bytes of the record (v2.0 layout):
+// bytes 0-7 = status bits/AGC_Out/3 INTs, same as before -
+// bytes 8-15 = the two new DINT fields (ExpWindow, LastTrimEncoderCount),
+// cleared with DWORD writes since both are already even-aligned DINTs,
+// no alignment trap to work around here either.
+      L     W#16#0; 
+      T     DIW [AR1,P#0.0]; // Clears AutoActive/RefEstablished/StNone/StFlick/NoneMem/FlickMem bits + AGC_Out byte
+      T     DIW [AR1,P#2.0]; // Clears Velocity_Out
+      T     DIW [AR1,P#4.0]; // Clears Lookup_PWM_Out
+      T     DIW [AR1,P#6.0]; // Clears AGC_Trim_Out
+      L     DW#16#0; 
+      T     DID [AR1,P#8.0]; // Clears ExpWindow
+      T     DID [AR1,P#12.0]; // Clears LastTrimEncoderCount
+// Move target pointer to the next structural block (+16 bytes, v2.0 record size)
+      L     #ResetPointer; 
+      L     P#16.0; 
+      +D    ; 
+      T     #ResetPointer; 
+      L     #ResetLoopCount; 
+      LOOP  _lp; 
+// Clear the user command reset trigger bit when finished
+      R     "AGC_LOG_DB".Reset_Log; 
+      BEU   ; // End execution block cycle early during reset pass
+NETWORK
+TITLE = Cyclic Data Capture Runtime Loop
+_log: NOP   0; 
+// Ensure execution is explicitly armed and buffer isn't full
+      A     "AGC_LOG_DB".LogActive; 
+      AN    "AGC_LOG_DB".LogDone; 
+      JCN   _end; 
+// Range validation check for write array boundaries
+      L     "AGC_LOG_DB".Index; 
+      L     600; 
+      >I    ; 
+      JCN   _run; 
+// Stop logger routines safely at memory threshold bounds
+      S     "AGC_LOG_DB".LogDone; 
+      R     "AGC_LOG_DB".LogActive; 
+      BEU   ; 
+_run: NOP   0; 
+// Compute structure entry memory alignment offset: (Index - 1) * 16
+// (record size is 16 bytes in DB889 v2.0, was 8 in v1.0)
+      L     "AGC_LOG_DB".Index; 
+      L     1; 
+      -I    ; 
+      L     16; 
+      *I    ; 
+      SLD   3; // Convert raw calculated byte count to system Bit-Pointer
+      L     P#4.0; // Base offset modifier for array location inside DB889
+      +D    ; 
+      LAR1  ; // Load resolved address pointer to Register AR1
+// Securely connect to your active source data instance as shared DB
+      L     #Instance_DB_No; 
+      T     #Source_DB; 
+      OPN   DB [#Source_DB]; 
+// Open logging destination as instance DI register for dynamic assignment
+      OPN   DI   889; 
+// Status bits - re-verified against FB610 V1.7's compiled interface,
+// NOT the v1.0 addresses (AutoActive moved 8.0 -> 12.0 when ExpWindow
+// was added to VAR_INPUT ahead of it; ReferenceEstablished was already
+// correct at 0.4). StNone/StFlick/NoneMem/FlickMem are new in v1.1.
+      A     DBX   12.0; // AutoActive
+      =     DIX [AR1,P#0.0]; 
+      A     DBX   0.4; // ReferenceEstablished (input)
+      =     DIX [AR1,P#0.1]; 
+      A     DBX   0.2; // StNone (input) - NEW v1.1
+      =     DIX [AR1,P#0.2]; 
+      A     DBX   0.3; // StFlick (input) - NEW v1.1
+      =     DIX [AR1,P#0.3]; 
+      A     DBX   24.1; // NoneMem (internal static) - NEW v1.1
+      =     DIX [AR1,P#0.4]; 
+      A     DBX   24.2; // FlickMem (internal static) - NEW v1.1
+      =     DIX [AR1,P#0.5]; 
+// AGC_Out (BYTE) and the three INT diagnostic outputs - re-verified addresses
+      L     DBB   20; // AGC_Out
+      T     DIB [AR1,P#1.0]; 
+      L     DBW   14; // Velocity_Out
+      T     DIW [AR1,P#2.0]; 
+      L     DBW   16; // Lookup_PWM_Out
+      T     DIW [AR1,P#4.0]; 
+      L     DBW   18; // AGC_Trim_Out
+      T     DIW [AR1,P#6.0]; 
+// New DINT diagnostic fields - NEW v1.1
+      L     DBD   8; // ExpWindow (input)
+      T     DID [AR1,P#8.0]; 
+      L     DBD   110; // LastTrimEncoderCount (internal static)
+      T     DID [AR1,P#12.0]; 
+// Step up the tracking counter pointer index value for the next execution
+      L     "AGC_LOG_DB".Index; 
+      L     1; 
+      +I    ; 
+      T     "AGC_LOG_DB".Index; 
+_end: NOP   0; 
+END_FUNCTION_BLOCK

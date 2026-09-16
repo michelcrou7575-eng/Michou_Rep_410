@@ -1,0 +1,52 @@
+FUNCTION "RS232 COMMS" : VOID
+TITLE =RS232 COMMUNICATION - CP340 TO ARDUINO MEGA FC130
+//==============================================================
+// FC130
+//
+// 410 Rotaliner Seam Detect Auto-Trim Controller
+//
+// Purpose
+// --------
+// Calls FB203 once every communication cycle.
+//
+// FB203 owns:
+//   • Communication state
+//   • Timeouts
+//   • Diagnostics
+//   • Status
+//   • Counters
+//
+// Machine logic reads communication status directly
+// from DB31.
+//
+//==============================================================
+VERSION : 2.0
+
+
+VAR_INPUT
+  CP_LADDR : INT ;	// CP340 logical address
+END_VAR
+BEGIN
+NETWORK
+TITLE =CP340 Communication Driver
+
+      CALL "CP340 COMMUNICATION" , "CP340 COMMUNICATION_DB" (
+           Start_Exchange           := "M 6.4",
+           Reset_Diagnostics        := FALSE,
+           CP_LADDR                 := #CP_LADDR,
+           Reply_Timeout            := T#250MS,
+           Busy                     := "CP340_Busy",
+           Done                     := "CP340_Done",
+           Error                    := "CP340_Error",
+           Comm_OK                  := "CP340_CommOK",
+           Status                   := "CP340_Status");
+
+
+
+NETWORK
+TITLE =End
+
+      BE    ; 
+
+END_FUNCTION
+

@@ -1,0 +1,820 @@
+FUNCTION_BLOCK "SEAM_CLASSIFY"
+TITLE =Seam monitor - expected-position tracking
+// v2.5 changes vs v2.4:
+//   - Fixed v2.4's "R #Alarm" no-op: R is RLO-conditional in STL, and
+//     the CLR earlier in the CLEAN PULSE branch (used to clear
+//     PreviousSeamWasNone) left RLO=0 going into it, so the reset
+//     never actually fired - Alarm stayed latched exactly as before
+//     v2.4, confirmed in the field (DB888_PRODUCTION_NEW_FB600_1,
+//     2026-09-02: Alarm TRUE all 600/600 records). Added "SET"
+//     immediately before the "R", matching the existing
+//     SET;R #FirstPulse pattern already in this block. v2.4's stated
+//     intent (Alarm self-clears on Clean recovery, no longer latches)
+//     is unchanged - this only fixes the instruction that failed to
+//     implement it.
+//   - NOTE: FB1111 v1.8's DB600 offset shift (+4 bytes, for a claimed
+//     "FB600 v2.4 Web_Velocity_Filtered VAR_INPUT") was based on a
+//     false premise - that field lives in DB640 (RUN_DATA_DB, added
+//     v0.4, owned by FC120 v1.3 for Mega OLED display smoothing) and
+//     has never existed in FB600's interface, this version or any
+//     other. FB600's VAR section, and therefore DB600's compiled
+//     layout, has NOT moved since v2.3. FB1111 needs its own version
+//     bump (v1.9) reverting to v1.7's real offsets - see that block's
+//     changelog.
+//
+// v2.4 changes vs v2.3:
+//   - Alarm no longer latches. Added "R #Alarm" to the CLEAN PULSE
+//     branch (same network that already zeroes BadStreakCount on
+//     recovery), so Alarm now self-clears the instant a genuine seam
+//     is seen again, instead of sticking until SystemReset or a
+//     ReferenceEstablished rising edge (which in practice never came -
+//     confirmed across 4 independent 30s production captures,
+//     2026-09-02: Alarm latched on the hardcoded 2-consecutive-miss
+//     threshold every time, self-healing (BadStreakCount) kept
+//     resetting cleanly on every Clean recovery, but Alarm rode out
+//     the rest of each capture window still latched). Michou's call:
+//     the bottomer's separate No Seam Alarm already stops the machine
+//     for a genuine sustained fault, so this Alarm doesn't need to be
+//     sticky - it's a live status flag now, not a latch. Trigger
+//     condition (2 consecutive StNone misses via PreviousSeamWasNone,
+//     independent of MaxBadStreak) is unchanged - only the clear
+//     behavior changed. MaxBadStreak-based reacquisition interlock
+//     (v2.1, separate network) is untouched.
+//
+// v2.3 changes vs v2.2:
+//   - New diagnostic output ExpWindow_Out: live mirror of the internal
+//     #ExpWindow static (the acquired/averaged encoder-count interval
+//     between banner pulses - the actual reference pitch the
+//     classifier is holding). Added so it can be monitored online and,
+//     downstream, used by FB610 to self-clock AGC_Trim while StNone
+//     holds level (StNone only edges once per missing-seam streak, so
+//     FB610's edge-triggered trim step currently only fires once no
+//     matter how long the dead zone continues - encoder-distance
+//     clocking off this same pitch value is the planned fix there).
+//     Mirrored unconditionally every scan - cheap, and useful to watch
+//     move during acquisition too, not just once referenced.
+//
+// v2.2 changes vs v2.1:
+//   - New whole-window spread check during acquisition (AcqWindowMin/Max,
+//     SpreadTolerancePct). The existing per-sample check only compares
+//     each new interval against the *running average so far* - it
+//     catches a single noisy outlier, but not a slow monotonic drift
+//     where each new sample individually passes the check while the
+//     average quietly chases a still-moving process. Observed case: a
+//     mix of ~1000 and ~1120-count intervals during a speed transient
+//     averaged into a bogus 1036 ExpWindow that then drifted the
+//     classifier off for the next several dozen seams. Acquisition now
+//     also requires the min-max spread across the whole accumulated
+//     window to stay inside SpreadTolerancePct (tighter than
+//     StabilityTolerancePct) before a sample counts toward
+//     RequiredStableCount.
+//
+// v2.1 changes vs v2.0:
+//   - New self-healing interlock: after MaxBadStreak consecutive
+//     non-Clean classifications (Flick or Missing/Late, in any mix),
+//     ReferenceEstablished is cleared automatically, forcing a fresh
+//     RequiredStableCount reacquisition against real measured pulses.
+//     Without this, a single phase-shifting disturbance (a genuine
+//     skipped/extra pulse, a momentary stop/restart, or - as tested -
+//     a manual jog via TEST_STIMULUS ForcePulseNow) leaves
+//     ExpectedNextPulse permanently offset: Clean/Flick/Missing all
+//     advance the schedule by a fixed theoretical ExpWindow step, never
+//     by what was actually measured, so nothing ever re-syncs on its
+//     own. Previously this required a manual System Reset to recover.
+//
+// v2.0 changes vs v1.0:
+//   - FirstPulse fix: "R #FirstPulse" now preceded by SET, not CLR
+//     (R/S are conditional coils - CLR forced RLO=0 so it never fired).
+//   - Classification (StNone/StClean/StFlick) and the missing-seam
+//     Alarm now run whenever Machine_Run=TRUE, independent of
+//     Auto_Mode. Auto switch no longer gates the classify/tolerance/
+//     missing-seam networks - it only remains relevant to whatever
+//     FB610 does with ReferenceEstablished + Auto_Mode to close the
+//     AGC loop, outside this block.
+//   - Expected-position tracking now starts on the rising edge of
+//     ReferenceEstablished, not on the rising edge of Auto_Mode -
+//     so live feedback runs the moment reference latches, in Manual.
+//   - New interlock: ReferenceEstablished (and StableCount/
+//     ReferenceSum) are forced to zero on:
+//       a) falling edge of Auto_Mode (operator switches Auto off)
+//       b) PotMoved = TRUE (operator is touching the pot)
+//     Reacquisition (RequiredStableCount consecutive clean intervals)
+//     is required again before Reference OK can re-latch.
+//   - Bootstrap acquisition network no longer requires Auto_Mode=FALSE
+//     to run - only requires ReferenceEstablished=FALSE. This lets it
+//     resume automatically the instant (a) or (b) above clears the bit,
+//     without waiting for the operator to also flip the Auto switch.
+//   - RequiredStableCount default raised 5 -> 10.
+//
+// INTEGRATION NOTE:
+//   PotMoved must be supplied by FB610 / the Mega side - it has no
+//   direct visibility of the pot (point B goes straight to Mega A6).
+//   Wire it as: TRUE while |PotValue - LastPotValue| exceeds your
+//   deadband, FALSE once settled. Level signal is fine - as long as
+//   it's TRUE, this block keeps clearing ReferenceEstablished, which
+//   is exactly "if the operator keeps turning the pot: no Reference OK."
+VERSION : 2.5
+
+
+VAR_INPUT
+  EncoderSnapshot : DINT ;	// Captured by OB40
+  LiveEncoderCount : DINT ;	// Current FM350-2 encoder count
+  BannerEventCount : DINT ;	// Incremented by OB40
+  Machine_Run : BOOL ;	
+  Auto_Mode : BOOL ;	
+  SystemReset : BOOL ;	
+  PotMoved : BOOL ;	// NEW - from FB610: pot wiper moved beyond deadband
+END_VAR
+VAR_OUTPUT
+  StNone : BOOL ;	
+  StClean : BOOL ;	
+  StFlick : BOOL ;	
+  Alarm : BOOL ;	
+  ReferenceEstablished : BOOL ;	// "Reference OK" - gates Auto availability
+  ExpWindow_Out : DINT ;	// NEW v2.3 - live mirror of #ExpWindow, the acquired reference pitch (encoder co
+END_VAR
+VAR
+  LastBannerEventCount : DINT ;	
+  LastPulseEncoder : DINT ;	
+  FirstPulse : BOOL  := TRUE;	// Reference acquisi
+  ExpWindow : DINT  := L#5000;	
+  ReferenceSum : DINT ;	
+  StableCount : INT ;	
+  RequiredStableCount : INT  := 10;	// was 5
+  StabilityTolerancePct : INT  := 15;	// Expected seam tra
+  SpreadTolerancePct : INT  := 5;	// NEW v2.2 - max whole-window spread during acquisition (tighter than StabilityT
+  AcqWindowMin : DINT ;	// NEW v2.2 - min PulseDelta seen in current acquisition attempt
+  AcqWindowMax : DINT ;	// NEW v2.2 - max PulseDelta seen in current acquisition attempt
+  ExpectedNextPulse : DINT ;	
+  ExpectedPositionValid : BOOL ;	
+  EarlyTolerancePct : INT  := 30;	
+  LateTolerancePct : INT  := 30;	
+  PreviousSeamWasNone : BOOL ;	// Internal state:
+// 0 = None
+// 1 = Clean
+// 2 = Flick
+// 3 = Idle / no classification
+  StateCode : INT  := 3;	// Edge memories
+//===
+  RefEstMem : BOOL ;	// NEW - edge memory, ReferenceEstablished rising edge
+  AutoOffMem : BOOL ;	// NEW - edge memory, Auto_Mode falling edge
+  BadStreakCount : INT ;	// v2.1 - consecutive non-Clean classifications
+  MaxBadStreak : INT  := 5;	// v2.1 - clears Reference OK once reached
+  SystemResetMem : BOOL ;	
+END_VAR
+VAR_TEMP
+  NewEventCount : DINT ;	
+  PulseDelta : DINT ;	
+  CandidateAverage : DINT ;	
+  StableCountD : DINT ;	
+  Difference : DINT ;	
+  StabilityBand : DINT ;	
+  SpreadBand : DINT ;	// NEW v2.2 - allowed spread = CandidateAverage * SpreadTolerancePct / 100
+  ProspectiveMin : DINT ;	// NEW v2.2 - window min if current PulseDelta is accepted
+  ProspectiveMax : DINT ;	// NEW v2.2 - window max if current PulseDelta is accepted
+  Spread : DINT ;	// NEW v2.2 - ProspectiveMax - ProspectiveMin
+  EarlyTolerance : DINT ;	
+  LateTolerance : DINT ;	
+  EarliestPosition : DINT ;	
+  LatestPosition : DINT ;	
+END_VAR
+BEGIN
+NETWORK
+TITLE =System reset - complete re-acquisition
+
+      A     #SystemReset; 
+      FP    #SystemResetMem; 
+      JCN   R001; 
+
+      L     #BannerEventCount; // Synchronize to the current OB40 event count.
+      T     #LastBannerEventCount; // Old Banner events are not replayed after reset.
+//;
+      L     0; 
+      T     #LastPulseEncoder; 
+      T     "SEAM_CLASSIFY_DB".EncoderSnapshot; 
+      T     "SEAM_CLASSIFY_DB".LiveEncoderCount; 
+      T     "SEAM_CLASSIFY_DB".BannerEventCount; 
+      T     "SEAM_CLASSIFY_DB".LastBannerEventCount; 
+//;
+      T     #ReferenceSum; 
+      T     #StableCount; 
+      T     #ExpectedNextPulse; 
+      T     #ExpWindow; 
+
+      SET   ; 
+      =     #FirstPulse; 
+
+      CLR   ; 
+      =     #ReferenceEstablished; 
+      =     #ExpectedPositionValid; 
+      =     #PreviousSeamWasNone; 
+      =     #Alarm; 
+//;
+      L     3; 
+      T     #StateCode; 
+//;
+      L     0; 
+      T     #BadStreakCount; 
+
+R001: NOP   0; 
+NETWORK
+TITLE =Detect number of new OB40 Banner events
+
+      L     #BannerEventCount; 
+      L     #LastBannerEventCount; 
+      -D    ; 
+      T     #NewEventCount; 
+//;
+      L     #NewEventCount; // Counter was reset or wrapped unexpectedly.
+      L     0; 
+      >=D   ; 
+      JC    E001; 
+
+      L     #BannerEventCount; 
+      T     #LastBannerEventCount; 
+//;
+      L     0; 
+      T     #NewEventCount; 
+
+E001: NOP   0; 
+NETWORK
+TITLE =First Banner pulse establishes encoder origin
+
+      L     #NewEventCount; 
+      L     0; 
+      <=D   ; 
+      JC    F001; 
+
+      A     #FirstPulse; 
+      JCN   F001; 
+
+      L     #EncoderSnapshot; 
+      T     #LastPulseEncoder; 
+//;
+      L     #BannerEventCount; 
+      T     #LastBannerEventCount; 
+//;
+      L     0; 
+      T     #NewEventCount; 
+
+      SET   ; 
+      R     #FirstPulse; 
+
+F001: NOP   0; 
+NETWORK
+TITLE =Lose Reference OK on Auto-mode falling edge
+
+      A     #Auto_Mode; 
+      FN    #AutoOffMem; 
+      JCN   L010; 
+
+      CLR   ; 
+      =     #ReferenceEstablished; 
+      =     #ExpectedPositionValid; 
+//;
+      L     0; 
+      T     #StableCount; 
+      T     #ReferenceSum; 
+
+L010: NOP   0; 
+NETWORK
+TITLE =Lose Reference OK on pot movement
+
+      A     #PotMoved; 
+      JCN   L020; 
+
+      CLR   ; 
+      =     #ReferenceEstablished; 
+      =     #ExpectedPositionValid; 
+//;
+      L     0; 
+      T     #StableCount; 
+      T     #ReferenceSum; 
+
+L020: NOP   0; 
+
+
+NETWORK
+TITLE =Classifications
+//Lose Reference OK after repeated bad classifications (self-healing resync)
+      L     #BadStreakCount; 
+      L     #MaxBadStreak; 
+      <I    ; 
+      JC    L030; 
+
+      CLR   ; 
+      =     #ReferenceEstablished; 
+      =     #ExpectedPositionValid; 
+//;
+      L     0; 
+      T     #StableCount; 
+      T     #ReferenceSum; 
+      T     #BadStreakCount; 
+
+L030: NOP   0; 
+NETWORK
+TITLE =Acquisition 
+//Acquisition - stability-gated reference building (any switch position)
+      L     #NewEventCount; 
+      L     0; 
+      <=D   ; 
+      JC    M099; 
+
+      A     #Machine_Run; 
+      JCN   M099; 
+
+      A     #ReferenceEstablished; 
+      JC    M099; 
+
+      L     #NewEventCount; // More than one interrupt occurred between two OB1 scans.
+      L     1; // Only the final encoder snapshot remains available.
+      >D    ; 
+      JC    M080; 
+//;
+      L     #EncoderSnapshot; // Calculate pulse-to-pulse encoder distance.
+      L     #LastPulseEncoder; 
+      -D    ; 
+      T     #PulseDelta; 
+//;
+      L     #PulseDelta; // Reject zero or reverse movement.
+      L     0; 
+      >D    ; 
+      JC    M010; 
+
+      JU    M080; 
+
+M010: L     #StableCount; // First usable interval initializes the candidate average
+      L     0; 
+      >I    ; 
+      JC    M020; 
+
+      L     #PulseDelta; 
+      T     #ReferenceSum; 
+//;
+      L     1; 
+      T     #StableCount; 
+//;
+      L     #PulseDelta; 
+      T     #AcqWindowMin; 
+      T     #AcqWindowMax; 
+//;
+      L     1; 
+      T     #StateCode; 
+
+      CLR   ; 
+      =     #PreviousSeamWasNone; 
+
+      JU    M070; 
+
+M020: L     #StableCount; // Calculate candidate running average
+      ITD   ; 
+      T     #StableCountD; 
+
+      L     #ReferenceSum; 
+      L     #StableCountD; 
+      /D    ; 
+      T     #CandidateAverage; 
+//;
+      L     #PulseDelta; // Difference = PulseDelta - CandidateAverage
+      L     #CandidateAverage; 
+      -D    ; 
+      T     #Difference; 
+//;
+      L     #Difference; // Absolute value of Difference
+      L     0; 
+      >=D   ; 
+      JC    M030; 
+
+      L     0; 
+      L     #Difference; 
+      -D    ; 
+      T     #Difference; 
+
+M030: L     #CandidateAverage; // Stability tolerance band (per-sample outlier rejection)
+      L     #StabilityTolerancePct; 
+      ITD   ; 
+      *D    ; 
+      L     L#100; 
+      /D    ; 
+      T     #StabilityBand; 
+//;
+      L     #StabilityBand; // Minimum tolerance is one encoder count.
+      L     1; 
+      >=D   ; 
+      JC    M032; 
+
+      L     1; 
+      T     #StabilityBand; 
+
+M032: L     #CandidateAverage; // Spread tolerance band (whole-window settling check
+      L     #SpreadTolerancePct; 
+      ITD   ; 
+      *D    ; 
+      L     L#100; 
+      /D    ; 
+      T     #SpreadBand; 
+//;
+      L     #SpreadBand; 
+      L     1; 
+      >=D   ; 
+      JC    M034; 
+
+      L     1; 
+      T     #SpreadBand; 
+
+M034: L     #AcqWindowMin; // Prospective window minimum if this sample were accepted
+      L     #PulseDelta; 
+      <D    ; 
+      JC    M035; 
+
+      L     #PulseDelta; 
+      T     #ProspectiveMin; 
+
+      JU    M036; 
+
+M035: L     #AcqWindowMin; 
+      T     #ProspectiveMin; 
+
+M036: L     #AcqWindowMax; // Prospective window maximum if this sample were accepted
+      L     #PulseDelta; 
+      >D    ; 
+      JC    M037; 
+
+      L     #PulseDelta; 
+      T     #ProspectiveMax; 
+
+      JU    M040; 
+
+M037: L     #AcqWindowMax; 
+      T     #ProspectiveMax; 
+
+M040: L     #Difference; // Compare new interval against running average AND whole-window spread
+      L     #StabilityBand; 
+      >D    ; 
+      JC    M045; 
+
+      L     #ProspectiveMax; 
+      L     #ProspectiveMin; 
+      -D    ; 
+      T     #Spread; 
+//;
+      L     #Spread; 
+      L     #SpreadBand; 
+      <=D   ; 
+      JC    M050; 
+
+M045: L     #PulseDelta; // Unstable interval, begin a new acquisition show Flick.
+      T     #ReferenceSum; 
+//;
+      L     1; 
+      T     #StableCount; 
+//;
+      L     #PulseDelta; 
+      T     #AcqWindowMin; 
+      T     #AcqWindowMax; 
+//;
+      L     2; 
+      T     #StateCode; 
+
+      CLR   ; 
+      =     #PreviousSeamWasNone; 
+
+      JU    M070; 
+
+M050: L     #ReferenceSum; // Stable interval - add it to the running sum, commit the window
+      L     #PulseDelta; 
+      +D    ; 
+      T     #ReferenceSum; 
+//;
+      L     #StableCount; 
+      L     1; 
+      +I    ; 
+      T     #StableCount; 
+//;
+      L     #ProspectiveMin; 
+      T     #AcqWindowMin; 
+//;
+      L     #ProspectiveMax; 
+      T     #AcqWindowMax; 
+//;
+      L     1; 
+      T     #StateCode; 
+
+      CLR   ; 
+      =     #PreviousSeamWasNone; 
+
+      L     #StableCount; // Is the required stable count reached?
+      L     #RequiredStableCount; 
+      <I    ; 
+      JC    M070; 
+
+      L     #StableCount; // Calculate final averaged reference.
+      ITD   ; 
+      T     #StableCountD; 
+//;
+      L     #ReferenceSum; 
+      L     #StableCountD; 
+      /D    ; 
+      T     #ExpWindow; 
+
+      SET   ; 
+      =     #ReferenceEstablished; 
+
+      JU    M070; 
+
+M080: L     0; // Invalid reference sample - noisy read, show Flick
+      T     #ReferenceSum; 
+      T     #StableCount; 
+
+      L     2; 
+      T     #StateCode; 
+
+      CLR   ; 
+      =     #PreviousSeamWasNone; 
+
+M070: L     #EncoderSnapshot; // Store the latest pulse position
+      T     #LastPulseEncoder; 
+
+      L     #BannerEventCount; 
+      T     #LastBannerEventCount; 
+
+      L     0; 
+      T     #NewEventCount; // Event fully consumed
+
+M099: NOP   0; 
+NETWORK
+TITLE =Reference established - start expected-position sequence
+
+      A     #ReferenceEstablished; 
+      FP    #RefEstMem; 
+      JCN   A099; 
+
+      L     3; 
+      T     #StateCode; 
+
+      CLR   ; 
+      =     #PreviousSeamWasNone; 
+      =     #Alarm; 
+//;
+      L     #LastPulseEncoder; // Start one reference pitch after the most recenpulse.
+      L     #ExpWindow; 
+      +D    ; 
+      T     #ExpectedNextPulse; 
+
+      SET   ; 
+      =     #ExpectedPositionValid; 
+
+A099: NOP   0; 
+NETWORK
+TITLE =Calculate early and late tolerance positions
+
+      A     #Machine_Run; 
+      JCN   T099; 
+
+      A     #ReferenceEstablished; 
+      JCN   T099; 
+
+      A     #ExpectedPositionValid; 
+      JCN   T099; 
+
+      L     #ExpWindow; // Early tolerance
+      L     #EarlyTolerancePct; 
+      ITD   ; 
+      *D    ; 
+      L     L#100; 
+      /D    ; 
+      T     #EarlyTolerance; 
+//;
+      L     #ExpWindow; // Late tolerance
+      L     #LateTolerancePct; 
+      ITD   ; 
+      *D    ; 
+      L     L#100; 
+      /D    ; 
+      T     #LateTolerance; 
+//;
+      L     #ExpectedNextPulse; 
+      L     #EarlyTolerance; 
+      -D    ; 
+      T     #EarliestPosition; 
+//;
+      L     #ExpectedNextPulse; 
+      L     #LateTolerance; 
+      +D    ; 
+      T     #LatestPosition; 
+
+T099: NOP   0; 
+NETWORK
+TITLE =Classify new Banner event (any switch position, once referenced)
+
+      L     #NewEventCount; 
+      L     0; 
+      <=D   ; 
+      JC    C099; 
+
+      A     #Machine_Run; 
+      JCN   C090; 
+//;
+      A     #ReferenceEstablished; 
+      JCN   C090; 
+//;
+      A     #ExpectedPositionValid; 
+      JCN   C090; 
+
+      L     #NewEventCount; // More than one pulse between OB1 scans is flicking.
+      L     1; 
+      >D    ; 
+      JC    C060; 
+
+      L     #EncoderSnapshot; // Pulse before the valid window is a flick.
+      L     #EarliestPosition; 
+      <D    ; 
+      JC    C060; 
+
+      L     #EncoderSnapshot; // Pulse after the late limit means the expected seam was missed.
+      L     #LatestPosition; 
+      >D    ; 
+      JC    C070; 
+
+      L     1; // CLEAN PULS
+      T     #StateCode; 
+
+      CLR   ; 
+      =     #PreviousSeamWasNone; 
+
+      L     0; 
+      T     #BadStreakCount; 
+      SET   ; // required - R is RLO-conditional and CLR above left RLO=0,
+// which made the unguarded R #Alarm below a silent no-op
+// (same pattern as SET;R #FirstPulse elsewhere in this block)
+      R     #Alarm; // v2.5 - self-clear on Clean recovery; downstream No Seam
+// Alarm already handles the stop-worthy case, so Alarm here
+// no longer needs to latch pending SystemReset/reacquisition.
+//;
+      L     #ExpectedNextPulse; // Advance from the theoretical expected position,
+      L     #ExpWindow; // not from the actual measured pulse position.
+      +D    ; 
+      T     #ExpectedNextPulse; 
+
+      JU    C090; 
+
+C060: L     2; // FLICK PULSE
+      T     #StateCode; 
+
+      CLR   ; 
+      =     #PreviousSeamWasNone; 
+
+      L     #BadStreakCount; // Do not advance ExpectedNextPulse.
+      L     1; // The genuine seam pulse is still expected.
+      +I    ; 
+      T     #BadStreakCount; 
+
+      JU    C090; 
+
+C070: L     0; // LATE PULSE - expected seam is considered missing
+      T     #StateCode; 
+//;
+      L     #BadStreakCount; 
+      L     1; 
+      +I    ; 
+      T     #BadStreakCount; 
+//;
+      A     #PreviousSeamWasNone; 
+      JCN   C075; 
+
+      SET   ; 
+      =     #Alarm; 
+
+      JU    C080; 
+
+C075: SET   ; 
+      =     #PreviousSeamWasNone; 
+
+C080: L     #ExpectedNextPulse; // Advance exactly one theoretical seam pitch.
+      L     #ExpWindow; 
+      +D    ; 
+      T     #ExpectedNextPulse; 
+
+C090: L     #EncoderSnapshot; // Consume captured OB40 events
+      T     #LastPulseEncoder; 
+//;
+      L     #BannerEventCount; 
+      T     #LastBannerEventCount; 
+
+C099: NOP   0; 
+NETWORK
+TITLE =Detect missing Banner seam (any switch position, once referenced
+
+      A     #Machine_Run; 
+      JCN   N099; 
+
+      A     #ReferenceEstablished; 
+      JCN   N099; 
+
+      A     #ExpectedPositionValid; 
+      JCN   N099; 
+
+      L     #NewEventCount; // An OB40 event is waiting to be processed.
+      L     0; // Let the event-classification network handle it.
+      >D    ; 
+      JC    N099; 
+
+      L     #LiveEncoderCount; // Has the encoder passed the late limit?
+      L     #LatestPosition; 
+      <=D   ; 
+      JC    N099; 
+
+      L     0; // MISSING SEAM
+      T     #StateCode; 
+//;
+      L     #BadStreakCount; 
+      L     1; 
+      +I    ; 
+      T     #BadStreakCount; 
+//;
+      A     #PreviousSeamWasNone; 
+      JCN   N010; 
+
+      SET   ; 
+      =     #Alarm; 
+
+      JU    N020; 
+
+N010: SET   ; 
+      =     #PreviousSeamWasNone; 
+
+N020: L     #ExpectedNextPulse; // Advance by one expected pitch.
+      L     #ExpWindow; 
+      +D    ; 
+      T     #ExpectedNextPulse; 
+
+N099: NOP   0; 
+NETWORK
+TITLE =Machine stopped - drain unused Banner events
+
+      AN    #Machine_Run; 
+      JCN   S099; 
+
+      L     #BannerEventCount; 
+      T     #LastBannerEventCount; 
+
+S099: NOP   0; 
+NETWORK
+TITLE =Decode mutually-exclusive state outputs
+
+      CLR   ; 
+      =     #StNone; 
+
+      CLR   ; 
+      =     #StClean; 
+
+      CLR   ; 
+      =     #StFlick; 
+
+      L     #StateCode; 
+      L     0; 
+      ==I   ; 
+      JCN   D010; 
+
+      SET   ; 
+      =     #StNone; 
+
+      JU    D099; 
+
+D010: L     #StateCode; 
+      L     1; 
+      ==I   ; 
+      JCN   D020; 
+
+      SET   ; 
+      =     #StClean; 
+
+      JU    D099; 
+
+D020: L     #StateCode; 
+      L     2; 
+      ==I   ; 
+      JCN   D099; 
+
+      SET   ; 
+      =     #StFlick; 
+
+D099: NOP   0; 
+NETWORK
+TITLE =Mirror ExpWindow to diagnostic output (NEW v2.3)
+
+      L     #ExpWindow; 
+      T     #ExpWindow_Out; 
+
+
+NETWORK
+TITLE =Green Lamp Reset
+
+      AN    #Machine_Run; 
+      L     S5T#5S; 
+      SD    T    105; 
+//;
+      A     T    105; 
+      R     #StClean; // To Turn OFF the Green Led !
+END_FUNCTION_BLOCK
+

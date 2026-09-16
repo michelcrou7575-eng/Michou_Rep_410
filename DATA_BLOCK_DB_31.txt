@@ -1,0 +1,79 @@
+DATA_BLOCK DB 31
+TITLE = '410 SEAM - RS232 DIAGNOSTICS'
+VERSION : 5.0
+
+STRUCT
+
+    //========================================================
+    // COMMUNICATION STATE
+    //========================================================
+
+    Comm_OK              : BOOL := FALSE;  // DBX0.0
+    Send_Busy            : BOOL := FALSE;  // DBX0.1
+    Receive_Busy         : BOOL := FALSE;  // DBX0.2
+    Waiting_For_Reply    : BOOL := FALSE;  // DBX0.3
+    Reply_Valid          : BOOL := FALSE;  // DBX0.4
+    Timeout_Active       : BOOL := FALSE;  // DBX0.5
+    Protocol_Error       : BOOL := FALSE;  // DBX0.6
+    Checksum_Error       : BOOL := FALSE;  // DBX0.7
+
+    Sequence_Error       : BOOL := FALSE;  // DBX1.0
+    Version_Error        : BOOL := FALSE;  // DBX1.1
+    Telegram_Type_Error  : BOOL := FALSE;  // DBX1.2
+    CP340_Error          : BOOL := FALSE;  // DBX1.3
+    Reserved_Bit_12      : BOOL := FALSE;  // DBX1.4
+    Reserved_Bit_13      : BOOL := FALSE;  // DBX1.5
+    Reserved_Bit_14      : BOOL := FALSE;  // DBX1.6
+    Reserved_Bit_15      : BOOL := FALSE;  // DBX1.7
+
+    //========================================================
+    // CURRENT EXCHANGE
+    //========================================================
+
+    Last_Sequence_Sent   : BYTE := B#16#00;  // DBB2
+    Last_Sequence_Ack    : BYTE := B#16#00;  // DBB3
+    Last_Command_Sent    : BYTE := B#16#00;  // DBB4
+    Last_Command_Ack     : BYTE := B#16#00;  // DBB5
+
+    Last_TX_Checksum     : BYTE := B#16#00;  // DBB6
+    Last_RX_Checksum     : BYTE := B#16#00;  // DBB7
+
+    Last_CP340_Status    : WORD := W#16#0000; // DBW8
+    Response_Time_ms     : WORD := W#16#0000; // DBW10
+    Maximum_Response_ms  : WORD := W#16#0000; // DBW12
+
+    //========================================================
+    // COUNTERS
+    //========================================================
+
+    Telegrams_Sent       : DINT := L#0;      // DBD14
+    Telegrams_Received   : DINT := L#0;      // DBD18
+    Valid_Replies        : DINT := L#0;      // DBD22
+    Timeout_Count        : DINT := L#0;      // DBD26
+    Checksum_Error_Count : DINT := L#0;      // DBD30
+    Sequence_Error_Count : DINT := L#0;      // DBD34
+    Protocol_Error_Count : DINT := L#0;      // DBD38
+    CP340_Error_Count    : DINT := L#0;      // DBD42
+    Recovery_Count       : DINT := L#0;      // DBD46
+
+    //========================================================
+    // TIMING
+    //========================================================
+
+    Exchange_Start_ms    : DINT := L#0;      // DBD50
+    Last_Good_Reply_ms   : DINT := L#0;      // DBD54
+    Last_Error_Time_ms   : DINT := L#0;      // DBD58
+
+    //========================================================
+    // FUTURE DIAGNOSTICS
+    //========================================================
+
+    Reserved_Word_01     : WORD := W#16#0000; // DBW62
+    Reserved_Word_02     : WORD := W#16#0000; // DBW64
+    Reserved_DWord_01    : DWORD := DW#16#00000000; // DBD66
+    Reserved_DWord_02    : DWORD := DW#16#00000000; // DBD70
+
+END_STRUCT;
+
+BEGIN
+END_DATA_BLOCK

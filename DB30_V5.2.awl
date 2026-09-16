@@ -1,0 +1,92 @@
+DATA_BLOCK DB 30
+TITLE = '410 SEAM - MEGA TO PLC STATUS'
+VERSION : 5.2
+// v5.2 - Fixes silent STEP7 alignment bug from v5.1: WORD fields
+// (NSL_Resistance, Baseline_ADC) auto-align to even byte offsets,
+// which inserted 1 byte of padding after Actual_PWM (ended at odd
+// offset 6... field starts at 7) and pushed every field from
+// NSL_Resistance onward one byte later than the real 16-byte wire
+// telegram (compiled struct grew to 18 bytes - confirmed via
+// Address column in STEP7 DB view, =18.0 at END_STRUCT).
+// P_REC_RS232 writes raw physical bytes 0...15 regardless of the
+// STRUCT symbol table, so the misaligned symbols were silently
+// reading one byte later than the Mega's actual data.
+// Fix: NSL_Resistance and Baseline_ADC split into explicit BYTE
+// Hi/Lo pairs (matches firmware's writeUInt16BigEndian - high byte
+// first). All fields are now plain BYTE, so no alignment padding
+// can occur anywhere in this struct. Physical offset now always
+// equals the DBBnn comment.
+//
+// v5.1 - Aligned with Mega firmware 7.0.0: Actual_Index is now just a
+// mirror of Actual_PWM (no index left on the Mega side). Reserved_14
+// renamed Extended_Status_Byte - Mega now writes real data there
+// (Pot_Moved / Local_Target_Indicated / Manual_Override_Active).
+VERSION : 5.2
+
+    STRUCT   //==========================================================
+// MEGA -> PLC FIXED 16-BYTE TELEGRAM
+    Protocol_Version : BYTE ;   // DBB0
+    Telegram_Type : BYTE ;   // DBB1: Expected 02
+    Sequence_Ack : BYTE ;   // DBB2
+    Status_Byte : BYTE ;   // DBB3
+    // Bit 0 = Mega ready
+    // Bit 1 = AUTO received
+    // Bit 2 = RUN received
+    // Bit 3 = NSL output active
+    // Bit 4 = OLED awake
+    // Bit 5 = PIR processing active
+    // Bit 6 = Command/protocol error
+    // Bit 7 = Hardware fault
+
+    Capability_Byte : BYTE ;   // DBB4
+    // Bit 0 = OLED installed
+    // Bit 1 = PIR inputs installed
+    // Bit 2 = Banner AGC installed
+    // Bit 3 = Point-A monitor installed
+    // Bit 4 = Future encoder installed
+    // Bit 5 = Future auxiliary sensor installed
+    // Bits 6...7 = Reserved
+
+    Actual_Index : BYTE ;   // DBB5
+    // No index left on the Mega - this now mirrors Actual_PWM (DBB6)
+    // exactly. Field name kept for telegram-layout compatibility.
+    Actual_PWM : BYTE ;   // DBB6
+    // Authoritative confirmation of what's driving the NSL-32 (currentPWM)
+
+    NSL_Resistance_Hi : BYTE ;   // DBB7
+    NSL_Resistance_Lo : BYTE ;   // DBB8
+    // Estimated resistance in ohms, high byte then low byte
+    // (was WORD NSL_Resistance in v5.1 - split to BYTE pair to
+    // eliminate STEP7 auto-alignment padding; combine with SHL/+
+    // or a temp WORD in the reading logic if needed)
+
+    Baseline_ADC_Hi : BYTE ;   // DBB9
+    Baseline_ADC_Lo : BYTE ;   // DBB10
+    // Filtered A6 value, 0...1023, high byte then low byte
+    // (was WORD Baseline_ADC in v5.1 - split for the same reason)
+
+    PointA_Scaled : BYTE ;   // DBB11
+    // A5 diagnostic scaled from 0...1023 to 0...255
+
+    PIR_Status : BYTE ;   // DBB12
+    // Bits 0...4 = PIR inputs
+    // Bits 5...7 = Reserved
+
+    Last_Command : BYTE ;   // DBB13
+    // Last command actually executed by Mega
+
+    Extended_Status_Byte : BYTE ;   // DBB14
+    // Bit 0 = Pot_Moved (operator pot wiper moved beyond deadband)
+    // Bit 1 = Local_Target_Indicated (diagnostic-only estimate from the
+    //         Point B resistance/PWM LUT - informational, NOT an AGC
+    //         input; PLC/FM350 via FB610 still owns AGC decisions)
+    // Bit 2 = Manual_Override_Active (Mega bench serial-terminal
+    //         override engaged - PLC AGC commands are being ignored)
+    // Bits 3...7 = Reserved
+
+    Checksum : BYTE ;   // DBB15
+    // Low byte of sum DBB0...DBB14
+
+    END_STRUCT ;
+BEGIN
+END_DATA_BLOCK

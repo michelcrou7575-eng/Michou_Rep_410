@@ -1,0 +1,84 @@
+DATA_BLOCK DB 20
+TITLE = '410 SEAM - PLC TO MEGA COMMAND'
+VERSION : 5.3
+
+// v5.3 changes vs v5.2:
+//   - Reserved_11 repurposed as Actual_Velocity : BYTE (DBB11) - live
+//     mirror of "RUN_DATA_DB".Web_Velocity_Filtered (a separate,
+//     slower EMA of FB610's Velocity_Out, filtered by FC120 v1.3
+//     specifically for this display byte so the smoothing doesn't
+//     touch FB610's AGC control-loop response). Confirmed on the real
+//     machine this value never exceeds ~200, so a single BYTE is
+//     sufficient - no scaling needed. Populated by FC120 v1.3's
+//     telegram-populate section.
+
+// v5.2 changes vs v5.1:
+//   - ExpWindow shrunk from 4 bytes (ExpWindow_B3..B0, a full DINT) to
+//     2 bytes (ExpWindow_Hi/Lo, an INT). "RUN_DATA_DB".Exp_Window_Out
+//     never realistically exceeds INT16 range in normal operation
+//     (defaults/observed values are in the hundreds-to-low-thousands;
+//     ~3937.85 counts/meter puts the +/-32767 ceiling at ~8.3m of seam
+//     pitch), and FC120 v1.2 now clamps it to +/-32767 before the split
+//     (same pattern as FB610 v1.7's WebVelocity clamp) so a runaway
+//     value saturates instead of silently wrapping. DBB9-10 go back to
+//     being spare Reserved bytes.
+//   - v5.1 changes (superseded above, kept for history): Reserved_07..
+//     Reserved_10 were repurposed as ExpWindow_B3..ExpWindow_B0
+//     (MSB..LSB) - live mirror of "RUN_DATA_DB".Exp_Window_Out (DINT,
+//     encoder counts), so the Mega OLED can display the currently
+//     acquired reference pitch. Individual BYTE fields, not a WORD/
+//     DWORD - same reasoning as every other field in this wire-protocol
+//     DB: P_SEND/FB203 write raw bytes 0..15, so a WORD/DWORD field
+//     here would risk STRUCT auto-alignment padding silently diverging
+//     the symbolic offsets from the wire layout (see DB30 v5.1
+//     postmortem). Populated by FC120 v1.2's "Populate outgoing
+//     PLC->Mega telegram content" network. FB203 State 1 does not clear
+//     ExpWindow_Hi/Lo (DBB7-8) - they're content, not reserved - but
+//     does clear Reserved_09/10 and Reserved_11..Reserved_14.
+
+STRUCT
+
+    //========================================================
+    // PLC -> MEGA FIXED 16-BYTE TELEGRAM
+    //========================================================
+
+    Protocol_Version : BYTE := B#16#05;   // DBB0
+    Telegram_Type    : BYTE := B#16#01;   // DBB1: 01 = PLC command
+    Sequence_Number  : BYTE := B#16#00;   // DBB2: Incremented for new command
+
+    Control_Byte     : BYTE := B#16#00;   // DBB3
+    // Bit 0 = Machine Run
+    // Bit 1 = AGC Auto enabled
+    // Bit 2 = Reset Mega diagnostics
+    // Bit 3 = PIR processing enabled
+    // Bit 4 = OLED wake request
+    // Bits 5...7 = Reserved
+
+    AGC_Command      : BYTE := B#16#00;   // DBB4
+    // 0 = Hold
+    // 1 = Resistance Up
+    // 2 = Resistance Down
+    // 3 = Set absolute lookup index
+
+    Absolute_Index   : BYTE := B#16#00;   // DBB5
+    // Used only when AGC_Command = 3
+
+    Step_Size        : BYTE := B#16#01;   // DBB6
+    // Normally 1 lookup-table position
+
+    ExpWindow_Hi     : BYTE := B#16#00;   // DBB7  - "RUN_DATA_DB".Exp_Window_Out (clamped +/-32767), high byte
+    ExpWindow_Lo     : BYTE := B#16#00;   // DBB8  - low byte
+    Reserved_09      : BYTE := B#16#00;   // DBB9  - spare (was ExpWindow_B1)
+    Reserved_10      : BYTE := B#16#00;   // DBB10 - spare (was ExpWindow_B0)
+    Actual_Velocity  : BYTE := B#16#00;   // DBB11 - "RUN_DATA_DB".Web_Velocity_Filtered, EMA'd for display (see FC120 v1.3)
+    Reserved_12      : BYTE := B#16#00;   // DBB12
+    Reserved_13      : BYTE := B#16#00;   // DBB13
+    Reserved_14      : BYTE := B#16#00;   // DBB14
+
+    Checksum         : BYTE := B#16#00;   // DBB15
+    // Low byte of sum DBB0...DBB14
+
+END_STRUCT;
+
+BEGIN
+END_DATA_BLOCK

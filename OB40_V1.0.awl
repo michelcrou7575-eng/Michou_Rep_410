@@ -1,0 +1,39 @@
+ORGANIZATION_BLOCK "INTERRUPT"
+TITLE =FM350-2 hardware gate interrupt - Banner pulse capture
+// Banner pulse output connected to A1 and I3 of FM350-2
+VERSION : 1.0
+
+
+VAR_TEMP
+  OB40_EV_CLASS : BYTE ;	
+  OB40_STRT_INF : BYTE ;	
+  OB40_PRIORITY : BYTE ;	
+  OB40_OB_NUMBR : BYTE ;	
+  OB40_RESERVED_1 : BYTE ;	
+  OB40_IO_FLAG : BYTE ;	
+  OB40_MDL_ADDR : WORD ;	
+  OB40_POINT_ADDR : DWORD ;	
+  OB40_DATE_TIME : DATE_AND_TIME ;	
+END_VAR
+BEGIN
+NETWORK
+TITLE =Capture encoder position at Banner edge
+
+      L     "FM350_DB".CHECKBACK_SIGNALS.USER_STAT_WORD0; 
+      T     "RUN_DATA_DB".EncoderSnapshot; 
+
+NETWORK
+TITLE =Increment monotonic Banner event count
+
+      L     "RUN_DATA_DB".BannerEventCount; 
+      L     1; 
+      +I    ; 
+      T     "RUN_DATA_DB".BannerEventCount; 
+NETWORK
+TITLE =Latch Interrupt 
+
+      SET   ; 
+      =     "RUN_DATA_DB".Interrupt_Pulse; 
+
+END_ORGANIZATION_BLOCK
+
