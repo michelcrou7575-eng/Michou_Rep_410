@@ -11,7 +11,30 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms
 //   still always parsed unconditionally, space or not. Also dropped a
 //   dead SET;=FoundDigit pair at the top that was immediately
 //   overwritten by the following CLR;=FoundDigit two lines later.
-VERSION : 0.11
+//
+// v0.12 changes vs v0.11 - synced against DB105 v0.3 (see that block's
+//   changelog, and DB105_Online_1.xps captured 2026-09-17):
+//   - NEW network "Detect scale fault": the KWS CY300 sends a fixed
+//     sentinel value (all 7 digits of the Byte_0-6 field filled, no
+//     leading spaces - confirmed live at 5222222) instead of a real
+//     reading when its measurement goes negative. GrossWeight_Actual is
+//     compared against DB105's new NegativeUnderScore_Value constant
+//     every scan; a match latches Alarm_ScaleFault. Exact REAL equality
+//     is safe here specifically because both sides are integer-valued
+//     (no fractional digit) and well under 2^24 - bit-exact in IEEE754
+//     single precision, not the usual float-equality trap.
+//   - "Skip valve/alarm update" network now also gates on Alarm_ScaleFault,
+//     same as ParseError - a scale reporting its fault sentinel is not
+//     a real weight, so the valve must not react to it (freezes at
+//     last-good state, same as a garbled telegram) until an operator
+//     acknowledges/resets Alarm_ScaleFault via HMI (not yet wired - see
+//     README "Still open", same gap as the two existing alarms).
+//   - Valve control network retargeted from the retired Setpoint_Fill/
+//     Hysteresis pair to DB105's new Fill_Start_SP/Fill_Stop_SP: opens
+//     below Fill_Start_SP, closes at/above Fill_Stop_SP directly - no
+//     Hysteresis subtraction needed since the two setpoints already
+//     define the deadband.
+VERSION : 0.12
 
 VAR_TEMP
    RetVal1 : INT;
@@ -142,27 +165,37 @@ TITLE =Parse decimal digit (Byte_8) and build final REAL weight
       T     "GLUE_SCALE_CONTROL_DB".GrossWeight_Actual;
 
 NETWORK
-TITLE =Skip valve/alarm update if parse failed this scan
+TITLE =Detect scale fault - GrossWeight_Actual matches the scale's negative-value sentinel (latching)
+// Exact REAL equality is safe here: both sides are integer-valued (no
+// fractional digit) and well under 2^24, so the DTR conversion is
+// bit-exact in IEEE754 single precision - this is not the usual
+// float-equality trap.
+      L     "GLUE_SCALE_CONTROL_DB".GrossWeight_Actual;
+      L     "GLUE_SCALE_CONTROL_DB".NegativeUnderScore_Value;
+      ==R ;
+      S     "GLUE_SCALE_CONTROL_DB".Alarm_ScaleFault;
+
+NETWORK
+TITLE =Skip valve/alarm update if parse failed or scale fault latched this scan
 
       A     "GLUE_SCALE_CONTROL_DB".ParseError;
+      O     "GLUE_SCALE_CONTROL_DB".Alarm_ScaleFault;
       JC    SKIP;
 
 NETWORK
-TITLE =Valve control - open below (Setpoint - Hysteresis), close at/above Setpoint
+TITLE =Valve control - open below Fill_Start_SP, close at/above Fill_Stop_SP
 
       A     "GLUE_SCALE_CONTROL_DB".Valve_Open;
       JC    CHKC;
 
       L     "GLUE_SCALE_CONTROL_DB".GrossWeight_Actual;
-      L     "GLUE_SCALE_CONTROL_DB".Setpoint_Fill;
-      L     "GLUE_SCALE_CONTROL_DB".Hysteresis;
-      -R  ;
+      L     "GLUE_SCALE_CONTROL_DB".Fill_Start_SP;
       <R  ;
       JC    OPEN;
       JU    VEND;
 
 CHKC: L     "GLUE_SCALE_CONTROL_DB".GrossWeight_Actual;
-      L     "GLUE_SCALE_CONTROL_DB".Setpoint_Fill;
+      L     "GLUE_SCALE_CONTROL_DB".Fill_Stop_SP;
       >=R ;
       JC    CLOS;
       JU    VEND;
