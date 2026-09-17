@@ -45,24 +45,39 @@ weight/valve/alarm state rather than acting on a bad telegram.
 
 ## Control logic (GLUE_SCALE_CONTROL_DB / DB105)
 
-- **Valve_Open**: hysteresis band (`Hysteresis` field, HMI-adjustable).
-  Opens when `GrossWeight_Actual < Setpoint_Fill - Hysteresis`; closes at
-  `GrossWeight_Actual >= Setpoint_Fill`.
+- **Valve_Open**: two explicit thresholds, no separate hysteresis
+  subtraction. Opens when `GrossWeight_Actual < Fill_Start_SP`; closes at
+  `GrossWeight_Actual >= Fill_Stop_SP`. (`Hysteresis` is still declared in
+  DB105 for struct-layout compatibility but is no longer read here.)
 - **Alarm_Overfill**: latching, sets if `GrossWeight_Actual > AlarmLimit_Overfill`.
 - **Alarm_Underfill**: 5 seconds after Valve_Open falls (timer T50), checks
   `GrossWeight_Actual < AlarmLimit_Underfill` once at that instant; latching.
-- Both alarms need an HMI-driven reset (`R` instruction) wired in separately —
-  not included here.
+- **Alarm_ScaleFault**: latching, sets if `GrossWeight_Actual` matches
+  `NegativeUnderScore_Value` — the KWS CY300's fixed sentinel telegram
+  (confirmed live: 5222222, all 7 digits of the integer-part field, no
+  leading spaces) sent in place of a real reading when its measurement
+  goes negative. Also gates valve/alarm updates the same way ParseError
+  does, so the valve doesn't react to the sentinel as if it were a weight.
+- All three alarms need an HMI-driven reset (`R` instruction) wired in
+  separately — not included here.
 
 ## Files
 
-- `FC104_GLUE_SCALE.awl` — SFC14 reads, ASCII parse, valve hysteresis,
-  alarm latching. Version 0.11.
+- `FC104_GLUE_SCALE.awl` — SFC14 reads, ASCII parse, valve control,
+  alarm latching (including scale-fault detection). Version 0.12.
 - `DB4_ABC3000A_DB.awl` — 20-byte raw telegram buffer, filled by SFC14.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
-  limits, hysteresis, valve/alarm output bits. Version 0.2.
+  limits, scale-fault sentinel, valve/alarm output bits. Version 0.3.
+- `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
+  sync the offline source after live-side field edits.
+- `Anybus Communicator configuration *.conf` — exported gateway config;
+  confirms the "GROSS FILTER" transaction/telegram layout is unchanged.
 
 ## Still open
 
-- HMI acknowledge/reset rungs for the two alarms.
+- HMI acknowledge/reset rungs for all three alarms (Overfill, Underfill,
+  ScaleFault).
 - Confirm T50 isn't used elsewhere in the 410 project.
+- `Hysteresis`, `SpareReal`, `Scale_Powered_On`, and `SpareBool_2` exist in
+  DB105 but aren't wired to anything in FC104 yet — no confirmed intended
+  behavior for any of them.

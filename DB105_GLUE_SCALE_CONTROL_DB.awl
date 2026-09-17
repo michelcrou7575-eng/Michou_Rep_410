@@ -1,28 +1,72 @@
 DATA_BLOCK "GLUE_SCALE_CONTROL_DB"    DB105
 TITLE =Glue Scale Weight Control and Alarms
-VERSION : 0.2
+// v0.3 changes vs v0.2 - synced against the live online DB (see
+//   DB105_Online_1.xps, captured 2026-09-17): these fields were added/
+//   renamed directly online, ahead of this source file. Brought back in
+//   sync so FC104 compiles against real field names/offsets - see
+//   FC104 v0.12 for the corresponding logic changes.
+//   - Setpoint_Fill (4.0) -> Fill_Start_SP (4.0) / Fill_Stop_SP (8.0):
+//     valve now opens below Fill_Start_SP and closes at/above
+//     Fill_Stop_SP directly - the gap between the two IS the hysteresis
+//     band now, replacing the old Setpoint_Fill +/- Hysteresis
+//     calculation. Hysteresis (still declared below, now at 24.0) is no
+//     longer read by FC104's valve network - kept in the struct only
+//     because removing it would shift every offset after it; left as an
+//     unused/reserved field pending a decision on whether it should
+//     still apply on top of the two setpoints.
+//   - NEW NegativeUnderScore_Value (20.0): fixed sentinel the KWS CY300
+//     sends in the integer-part field when its reading goes negative -
+//     confirmed live at 5222222 (all 7 digits of the Byte_0-6 field
+//     filled, no leading spaces). Not a real weight - FC104 now compares
+//     GrossWeight_Actual against this every scan to catch a scale fault.
+//   - NEW SpareReal (28.0): appeared online, not yet wired to anything.
+//   - Address 32.5 (Scale_Powered_On) appeared online - carried over
+//     as-is, not wired by FC104 yet, no confirmed intended behavior.
+//   - Address 32.6 (was a plain spare bit online) repurposed here as
+//     Alarm_ScaleFault - latching output, set when GrossWeight_Actual
+//     matches NegativeUnderScore_Value (see FC104).
+//   - Initial values below are set to match the live/tuned Actual
+//     values captured in DB105_Online_1.xps (Fill_Start_SP=50,
+//     Fill_Stop_SP=70, AlarmLimit_Overfill=80, AlarmLimit_Underfill=20,
+//     Hysteresis=2, NegativeUnderScore_Value=5222222) rather than the
+//     all-zero initial values the online capture showed for every
+//     field - a cold download of this source would otherwise silently
+//     wipe the operator's live tuning back to zero.
+VERSION : 0.3
 
-  STRUCT 
+  STRUCT
    GrossWeight_Actual : REAL ;	//Parsed live weight from KWS CY300 scale (kg)
-   Setpoint_Fill : REAL ;	//Operator-entered target fill weight (kg) - HMI writable
+   Fill_Start_SP : REAL ;	//Operator-entered fill-start weight (kg) - valve opens below this - HMI writable
+   Fill_Stop_SP : REAL ;	//Operator-entered fill-stop weight (kg) - valve closes at/above this - HMI writable
    AlarmLimit_Overfill : REAL ;	//Operator-entered max allowed weight (kg) - HMI writable
    AlarmLimit_Underfill : REAL ;	//Operator-entered min allowed weight (kg) - HMI writable
-   Hysteresis : REAL ;	//Operator-entered valve hysteresis band (kg) - HMI writable
+   NegativeUnderScore_Value : REAL ;	//Fixed sentinel value the KWS CY300 sends when its reading is negative (scale fault) - see FC104
+   Hysteresis : REAL ;	//Reserved - no longer read by FC104's valve network (see v0.3 changelog); kept for struct-layout compatibility
+   SpareReal : REAL ;
    Valve_Open : BOOL ;	//Output: TRUE = valve open, filling in progress
    Alarm_Overfill : BOOL ;	//Output: TRUE = weight exceeded overfill limit (latching)
    Alarm_Underfill : BOOL ;	//Output: TRUE = weight below underfill limit at settle check (latching)
    ParseError : BOOL ;	//Output: TRUE = ASCII parse failed this scan (bad/garbled scale data)
    Valve_Open_Prev : BOOL ;	//Internal: previous scan Valve_Open state, for edge detection
-  END_STRUCT ;	
+   Scale_Powered_On : BOOL ;	//Live Data Coming In - not yet wired by FC104
+   Alarm_ScaleFault : BOOL ;	//Output: TRUE = GrossWeight_Actual matched NegativeUnderScore_Value this scan - scale reporting a negative/fault reading (latching)
+   SpareBool_2 : BOOL ;
+  END_STRUCT ;
 BEGIN
-   GrossWeight_Actual := 0.0; 
-   Setpoint_Fill := 0.0; 
-   AlarmLimit_Overfill := 300.0; 
-   AlarmLimit_Underfill := 0.0; 
-   Hysteresis := 0.5; 
-   Valve_Open := FALSE; 
-   Alarm_Overfill := FALSE; 
-   Alarm_Underfill := FALSE; 
-   ParseError := FALSE; 
-   Valve_Open_Prev := FALSE; 
+   GrossWeight_Actual := 0.0;
+   Fill_Start_SP := 5.000000e+001;
+   Fill_Stop_SP := 7.000000e+001;
+   AlarmLimit_Overfill := 8.000000e+001;
+   AlarmLimit_Underfill := 2.000000e+001;
+   NegativeUnderScore_Value := 5.222222e+006;
+   Hysteresis := 2.000000e+000;
+   SpareReal := 0.0;
+   Valve_Open := FALSE;
+   Alarm_Overfill := FALSE;
+   Alarm_Underfill := FALSE;
+   ParseError := FALSE;
+   Valve_Open_Prev := FALSE;
+   Scale_Powered_On := FALSE;
+   Alarm_ScaleFault := FALSE;
+   SpareBool_2 := FALSE;
 END_DATA_BLOCK
