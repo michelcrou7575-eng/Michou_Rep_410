@@ -58,16 +58,23 @@ weight/valve/alarm state rather than acting on a bad telegram.
   leading spaces) sent in place of a real reading when its measurement
   goes negative. Also gates valve/alarm updates the same way ParseError
   does, so the valve doesn't react to the sentinel as if it were a weight.
-- All three alarms need an HMI-driven reset (`R` instruction) wired in
-  separately — not included here.
+- **Reset_Alarms**: HMI-driven input bit. While TRUE, clears
+  `Alarm_Overfill`, `Alarm_Underfill` and `Alarm_ScaleFault` together
+  every scan (level-conditioned, not edge — safe as a momentary
+  acknowledge button, since any alarm whose fault condition is still
+  present just re-latches the next scan). Runs unconditionally, even on
+  a scan where ParseError/Alarm_ScaleFault would otherwise skip the rest
+  of the block, so a latched fault can always be cleared. The PLC side
+  is wired; connecting an actual HMI button to this bit is still open.
 
 ## Files
 
 - `FC104_GLUE_SCALE.awl` — SFC14 reads, ASCII parse, valve control,
-  alarm latching (including scale-fault detection). Version 0.12.
+  alarm latching and reset. Version 0.13.
 - `DB4_ABC3000A_DB.awl` — 20-byte raw telegram buffer, filled by SFC14.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
-  limits, scale-fault sentinel, valve/alarm output bits. Version 0.3.
+  limits, scale-fault sentinel, valve/alarm output bits, alarm reset.
+  Version 0.4.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.
 - `Anybus Communicator configuration *.conf` — exported gateway config;
@@ -75,9 +82,9 @@ weight/valve/alarm state rather than acting on a bad telegram.
 
 ## Still open
 
-- HMI acknowledge/reset rungs for all three alarms (Overfill, Underfill,
-  ScaleFault).
+- HMI button/screen wiring to pulse `Reset_Alarms` — the PLC-side reset
+  logic exists, nothing drives the bit yet.
 - Confirm T50 isn't used elsewhere in the 410 project.
-- `Hysteresis`, `SpareReal`, `Scale_Powered_On`, and `SpareBool_2` exist in
-  DB105 but aren't wired to anything in FC104 yet — no confirmed intended
-  behavior for any of them.
+- `Hysteresis`, `SpareReal`, and `Scale_Powered_On` exist in DB105 but
+  aren't wired to anything in FC104 yet — no confirmed intended behavior
+  for any of them.
