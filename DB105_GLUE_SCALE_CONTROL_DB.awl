@@ -32,7 +32,20 @@ TITLE =Glue Scale Weight Control and Alarms
 //     all-zero initial values the online capture showed for every
 //     field - a cold download of this source would otherwise silently
 //     wipe the operator's live tuning back to zero.
-VERSION : 0.3
+//
+// v0.4 changes vs v0.3:
+//   - Address 32.7 (was SpareBool_2) repurposed as Reset_Alarms - a
+//     single HMI-driven command bit that clears all three latching
+//     alarms (Overfill, Underfill, ScaleFault) at once. FC104's new
+//     reset network reads this bit directly (level-conditioned, not
+//     edge-detected) - FC104 is a FUNCTION with no static memory of its
+//     own to hold edge-detect state in, and a plain level read is
+//     sufficient for a momentary HMI acknowledge button: R only forces
+//     the alarms to 0 while this bit is TRUE, and each alarm's own
+//     latch network is free to re-set it the very next scan if the
+//     underlying fault is still present - it cannot be permanently
+//     masked by holding the button down.
+VERSION : 0.4
 
   STRUCT
    GrossWeight_Actual : REAL ;	//Parsed live weight from KWS CY300 scale (kg)
@@ -50,7 +63,7 @@ VERSION : 0.3
    Valve_Open_Prev : BOOL ;	//Internal: previous scan Valve_Open state, for edge detection
    Scale_Powered_On : BOOL ;	//Live Data Coming In - not yet wired by FC104
    Alarm_ScaleFault : BOOL ;	//Output: TRUE = GrossWeight_Actual matched NegativeUnderScore_Value this scan - scale reporting a negative/fault reading (latching)
-   SpareBool_2 : BOOL ;
+   Reset_Alarms : BOOL ;	//Input: HMI-driven, hold/pulse TRUE to clear Alarm_Overfill, Alarm_Underfill and Alarm_ScaleFault
   END_STRUCT ;
 BEGIN
    GrossWeight_Actual := 0.0;
@@ -68,5 +81,5 @@ BEGIN
    Valve_Open_Prev := FALSE;
    Scale_Powered_On := FALSE;
    Alarm_ScaleFault := FALSE;
-   SpareBool_2 := FALSE;
+   Reset_Alarms := FALSE;
 END_DATA_BLOCK

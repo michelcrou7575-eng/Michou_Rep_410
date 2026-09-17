@@ -34,7 +34,20 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms
 //     below Fill_Start_SP, closes at/above Fill_Stop_SP directly - no
 //     Hysteresis subtraction needed since the two setpoints already
 //     define the deadband.
-VERSION : 0.12
+//
+// v0.13 changes vs v0.12 - HMI alarm reset (per DB105 v0.4):
+//   - NEW network "Reset latched alarms", placed after the SKIP: label
+//     so it always runs every scan regardless of this scan's
+//     ParseError/Alarm_ScaleFault skip state - a latched alarm must
+//     stay resettable even while it's actively freezing the rest of
+//     this block, otherwise Alarm_ScaleFault could never be cleared
+//     once it fires (it would perpetually skip past its own reset).
+//     Reads DB105.Reset_Alarms directly (level, not edge) - clears
+//     Alarm_Overfill/Alarm_Underfill/Alarm_ScaleFault together while
+//     TRUE; each alarm's own network re-latches next scan if its fault
+//     condition is still actually present, so this can't mask a live
+//     fault by holding the button down.
+VERSION : 0.13
 
 VAR_TEMP
    RetVal1 : INT;
@@ -243,5 +256,13 @@ NETWORK
 TITLE =Exit point for parse-error skip
 
 SKIP: NOP   0;
+
+NETWORK
+TITLE =Reset latched alarms - HMI-driven, runs regardless of this scan's skip state
+
+      A     "GLUE_SCALE_CONTROL_DB".Reset_Alarms;
+      R     "GLUE_SCALE_CONTROL_DB".Alarm_Overfill;
+      R     "GLUE_SCALE_CONTROL_DB".Alarm_Underfill;
+      R     "GLUE_SCALE_CONTROL_DB".Alarm_ScaleFault;
 
 END_FUNCTION
