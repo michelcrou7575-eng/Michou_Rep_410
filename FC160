@@ -1,0 +1,51 @@
+FUNCTION "HMI" : VOID
+TITLE =HMI Process FC160
+VERSION : 0.1
+
+
+VAR_TEMP
+  START_SCREEN_ON : BOOL ;	
+END_VAR
+BEGIN
+NETWORK
+TITLE =Read HMI Screen
+
+      L     "HMI DB".Screen_Number_Read; 
+      T     MW   350; // Actual Screen
+NETWORK
+TITLE =Switch to Screen S 
+
+      A(    ; 
+      L     MW   352; // Requested Screen
+      L     "HMI DB".Screen_Number_Cmd; 
+      ==I   ; 
+      )     ; 
+      JC    TRIG; 
+
+      A(    ; 
+      L     MW   352; // Requested Screen
+      L     MW   350; // Actual Screen
+      <>I   ; 
+      )     ; 
+      JCN   RSET; 
+
+      L     MW   352; // Requested Screen
+      T     "HMI DB".Screen_Number_Cmd; 
+      JU    DONE; 
+
+TRIG: AN    "HMI DB".Screen_Cmd_Trigger; 
+      S     "HMI DB".Screen_Cmd_Trigger; 
+      L     0; 
+      T     MW   352; // Requested Screen
+      JU    DONE; 
+
+RSET: R     "HMI DB".Screen_Cmd_Trigger; 
+
+DONE: NOP   0; 
+NETWORK
+TITLE =Function Selection 
+
+
+
+END_FUNCTION
+
