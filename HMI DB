@@ -4,13 +4,13 @@ VERSION : 0.1
 
 
   STRUCT 	
-   Actual_Glue_Weight : INT ;	//Actual Glue Weight [Kg]
-   Fill_Start_Weight : INT ;	//Pump Start Glue Weight [Kg] - HMI Input
-   Fill_Stop_Weight : INT ;	//Pump Stop Glue  Weight [Kg] - HMI Input
+    Actual_Glue_Weight : INT ;	//Actual Glue Weight [Kg]
+   Fill_Start_Weight_SP : INT ;	//Pump Start Glue Weight [Kg] - HMI Setpoint Input
+   Fill_Stop_Weight_SP : INT ;	//Pump Stop Glue  Weight [Kg] - HMI Setpoint Input
    Actual_Transfered_Weight : INT ;	//Actual Glue Transfered Weight [Kg]
    Bottomer_Velocity : INT ;	//Actual Bottomer Velocity [Tube/min]
-   Hot_Water_OnTime : INT ;	//Hot Water OnTime [s] - HMI Input
-   Hot_Water_OffTime : INT ;	//Hot Water OffTime [s] - HMI Input
+   Hot_Water_OnTime_SP : INT ;	//Hot Water OnTime [s] - HMI Setpoint Input
+   Hot_Water_OffTime_SP : INT ;	//Hot Water OffTime [s] - HMI Setpoint Input
    Spare_INT_121 : INT ;	
    Spare_INT_122 : INT ;	
    Spare_INT_123 : INT ;	
