@@ -43,8 +43,13 @@ RSET: R     "HMI DB".Screen_Cmd_Trigger;
 
 DONE: NOP   0; 
 NETWORK
-TITLE =Function Selection 
-
+TITLE =Function Selection
+// TODO: not yet implemented. No spec/requirements recorded anywhere in
+// this project for what "Function Selection" should do (which functions,
+// selected how -- HMI buttons via Data_Write bits? Screen_Number_Cmd
+// values? something else?), so left as an explicit stub rather than
+// guessing at logic for a live PLC. Fill in once the requirement is
+// defined.
 
 
 END_FUNCTION
