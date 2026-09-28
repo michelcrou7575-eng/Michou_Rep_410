@@ -2,8 +2,9 @@
 
 Reads a KILO TECK KWS CY300 glue-transfer scale via serial ASCII, brings it
 into the S7-315-2 DP PLC through an Anybus Communicator (PROFIBUS gateway),
-parses the ASCII weight into a REAL, and drives a fill valve with hysteresis
-plus latching over/underfill alarms.
+parses the ASCII weight into an INT (whole kg — the scale's decimal digit is
+discarded, fractional precision isn't needed), and drives a fill valve with
+hysteresis plus latching over/underfill alarms.
 
 ## Hardware / signal chain
 
@@ -34,14 +35,17 @@ Anybus Communicator --PROFIBUS DP (node addr 4)--> Siemens S7-315-2 DP CPU
 |---|---|
 | 0-6 | Integer part, right-justified, space-padded, up to 3 digits used (0-300kg scale) |
 | 7 | `.` (0x2E) |
-| 8 | Decimal digit |
+| 8 | Decimal digit (parsed, then discarded — see below) |
 | 9-10 | `k`,`g` |
 | 11-19 | Padding (0x00 / spaces) |
 
-FC155 parses Byte_0-6 and Byte_8 into `"GLUE SCALE CONTROL DB".GrossWeight_Actual : REAL`.
-Byte_7/9/10 are checked against their fixed values each scan; any mismatch
-(or a non-zero SFC14 RET_VAL) sets `ParseError` and holds the last-good
-weight/valve/alarm state rather than acting on a bad telegram.
+FC155 parses Byte_0-6 into `"GLUE SCALE CONTROL DB".GrossWeight_Actual : INT`
+(whole kg). Byte_8 is no longer converted into a fractional part — the scale
+transaction doesn't need sub-kg precision, and every live setpoint was
+already a whole number. Byte_7/9/10 are checked against their fixed values
+each scan; any mismatch (or a non-zero SFC14 RET_VAL) sets `ParseError` and
+holds the last-good weight/valve/alarm state rather than acting on a bad
+telegram.
 
 ## Control logic ("GLUE SCALE CONTROL DB" / DB105)
 
@@ -52,12 +56,15 @@ weight/valve/alarm state rather than acting on a bad telegram.
 - **Alarm_Overfill**: latching, sets if `GrossWeight_Actual > AlarmLimit_Overfill`.
 - **Alarm_Underfill**: 5 seconds after Valve_Open falls (timer T50), checks
   `GrossWeight_Actual < AlarmLimit_Underfill` once at that instant; latching.
-- **Alarm_ScaleFault**: latching, sets if `GrossWeight_Actual` matches
-  `NegativeUnderScore_Value` — the KWS CY300's fixed sentinel telegram
-  (confirmed live: 5222222, all 7 digits of the integer-part field, no
-  leading spaces) sent in place of a real reading when its measurement
-  goes negative. Also gates valve/alarm updates the same way ParseError
-  does, so the valve doesn't react to the sentinel as if it were a weight.
+- **Alarm_ScaleFault**: latching, sets if the raw parsed integer matches
+  `NegativeUnderScore_Value` (DINT, 5222222) — the KWS CY300's fixed
+  sentinel telegram (all 7 digits of the integer-part field, no leading
+  spaces) sent in place of a real reading when its measurement goes
+  negative. The comparison runs on the wide parse temp *before* it's
+  truncated into the INT `GrossWeight_Actual` — 5222222 doesn't fit in
+  16-bit INT range, so comparing the already-truncated value would never
+  match. Also gates valve/alarm updates the same way ParseError does, so
+  the valve doesn't react to the sentinel as if it were a weight.
 - **Reset_Alarms**: HMI-driven input bit. While TRUE, clears
   `Alarm_Overfill`, `Alarm_Underfill` and `Alarm_ScaleFault` together
   every scan (level-conditioned, not edge — safe as a momentary
@@ -69,16 +76,18 @@ weight/valve/alarm state rather than acting on a bad telegram.
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source. SFC14 reads, ASCII parse,
-  valve control, alarm latching and reset. STEP7 export of the live PLC's
-  actual block — logic-identical to the now-deleted FC104_GLUE_SCALE.awl
-  v0.13; FC104 was compiled, deployed, then renumbered FC104->FC155 and
-  renamed "GLUE_SCALE" -> "GLUE SCALE LOGIC" on the real PLC project.
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.14. SFC14 reads,
+  ASCII parse (INT weight, decimal digit discarded), valve control, alarm
+  latching and reset. Originated as a STEP7 export of the live PLC's
+  actual block — logic was identical to the now-deleted
+  FC104_GLUE_SCALE.awl v0.13 at that point; FC104 was compiled, deployed,
+  then renumbered FC104->FC155 and renamed "GLUE_SCALE" ->
+  "GLUE SCALE LOGIC" on the real PLC project.
 - `DB4_ABC3000A_DB.awl` — 20-byte raw telegram buffer, filled by SFC14.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
   limits, scale-fault sentinel, valve/alarm output bits, alarm reset.
-  Version 0.5. Symbol renamed `"GLUE SCALE CONTROL DB"` (spaces) to match
-  what FC155 actually references, same rename FC104->FC155 prompted.
+  Version 0.6. Symbol is `"GLUE SCALE CONTROL DB"` (spaces) to match what
+  FC155 actually references.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.
 - `Anybus Communicator configuration *.conf` — exported gateway config;

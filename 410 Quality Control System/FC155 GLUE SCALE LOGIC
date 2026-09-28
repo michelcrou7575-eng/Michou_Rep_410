@@ -47,17 +47,39 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms FC155
 //     TRUE; each alarm's own network re-latches next scan if its fault
 //     condition is still actually present, so this can't mask a live
 //     fault by holding the button down.
-VERSION : 0.13
+//
+// v0.14 changes vs v0.13 - REAL -> INT for the scale weight/setpoints
+//   (per DB105 v0.6 - Michou's call: the scale transaction doesn't need
+//   fractional precision):
+//   - Byte_8 (the scale's decimal digit) is no longer parsed at all -
+//     #DecDigit and the REAL-math network that added it to
+//     GrossWeight_Actual are gone. #IntPart (still DINT internally,
+//     unchanged parse networks) is now stored directly into the INT
+//     GrossWeight_Actual via a plain T - same DINT-to-narrower-type
+//     truncation idiom already used elsewhere in this project (FC120's
+//     Actual_Velocity, FB1111's StateCode/BadStreakCount).
+//   - "Detect scale fault" now compares #IntPart directly (DINT, ==D)
+//     against NegativeUnderScore_Value (DINT), BEFORE the truncation
+//     into GrossWeight_Actual above - not the other way around. The
+//     sentinel 5222222 does not fit in 16-bit INT range, so comparing
+//     the already-truncated GrossWeight_Actual would compare a wrapped/
+//     corrupted value and could never match the real sentinel again.
+//     Order matters here: fault detection reads the wide temp, the INT
+//     store is a separate, later step.
+//   - Valve control, Overfill and Underfill networks switched from REAL
+//     comparisons (<R/>=R/>R) to INT comparisons (<I/>=I/>I) to match
+//     DB105's new field types. No logic/threshold change - same
+//     open-below-Fill_Start_SP, close-at/above-Fill_Stop_SP behavior.
+VERSION : 0.14
 
 
 VAR_TEMP
-  RetVal1 : INT ;	
-  RetVal2 : INT ;	
-  IntPart : DINT ;	
-  DecDigit : DINT ;	
-  CharVal : INT ;	
-  FoundDigit : BOOL ;	
-  LoopIndex : INT ;	
+  RetVal1 : INT ;
+  RetVal2 : INT ;
+  IntPart : DINT ;
+  CharVal : INT ;
+  FoundDigit : BOOL ;
+  LoopIndex : INT ;
 END_VAR
 BEGIN
 NETWORK
@@ -155,38 +177,20 @@ TITLE =Parse integer part, Byte_6 - field's last position, always a dig
       T     #IntPart; 
 
 NETWORK
-TITLE =Parse decimal digit (Byte_8) and build final REAL weight
-
-      L     "ABC3000A_DB".Byte_8; 
-      L     B#16#30; 
-      -I    ; 
-      T     #CharVal; 
-      L     #CharVal; 
-      ITD   ; 
-      T     #DecDigit; 
-
-      L     #IntPart; 
-      DTR   ; 
-      T     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
-
-      L     #DecDigit; 
-      DTR   ; 
-      L     1.000000e+001; 
-      /R    ; 
-      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
-      +R    ; 
-      T     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
+TITLE =Detect scale fault - raw parsed integer matches the scale's negative-value sentinel (latching)
+// Compares the wide #IntPart DINT temp, not GrossWeight_Actual - the
+// sentinel 5222222 doesn't fit in 16-bit INT range, so this must run
+// BEFORE #IntPart is truncated into the INT GrossWeight_Actual below.
+      L     #IntPart;
+      L     "GLUE SCALE CONTROL DB".NegativeUnderScore_Value;
+      ==D   ;
+      S     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
 
 NETWORK
-TITLE =Detect scale fault - GrossWeight_Actual matches the scale's nega
-// Exact REAL equality is safe here: both sides are integer-valued (no
-// fractional digit) and well under 2^24, so the DTR conversion is
-// bit-exact in IEEE754 single precision - this is not the usual
-// float-equality trap.
-      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
-      L     "GLUE SCALE CONTROL DB".NegativeUnderScore_Value; 
-      ==R   ; 
-      S     "GLUE SCALE CONTROL DB".Alarm_ScaleFault; 
+TITLE =Store final weight - Byte_8's decimal digit is discarded, INT resolution is 1kg
+
+      L     #IntPart;
+      T     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
 
 NETWORK
 TITLE =Skip valve/alarm update if parse failed or scale fault latched t
@@ -201,16 +205,16 @@ TITLE =Valve control - open below Fill_Start_SP, close at/above Fill_St
       A     "GLUE SCALE CONTROL DB".Valve_Open; 
       JC    CHKC; 
 
-      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
-      L     "GLUE SCALE CONTROL DB".Fill_Start_SP; 
-      <R    ; 
-      JC    OPEN; 
-      JU    VEND; 
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+      L     "GLUE SCALE CONTROL DB".Fill_Start_SP;
+      <I    ;
+      JC    OPEN;
+      JU    VEND;
 
-CHKC: L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
-      L     "GLUE SCALE CONTROL DB".Fill_Stop_SP; 
-      >=R   ; 
-      JC    CLOS; 
+CHKC: L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+      L     "GLUE SCALE CONTROL DB".Fill_Stop_SP;
+      >=I   ;
+      JC    CLOS;
       JU    VEND; 
 
 OPEN: SET   ; 
@@ -225,10 +229,10 @@ VEND: NOP   0;
 NETWORK
 TITLE =Overfill alarm - latching, set on exceed, no auto-reset here
 
-      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
-      L     "GLUE SCALE CONTROL DB".AlarmLimit_Overfill; 
-      >R    ; 
-      S     "GLUE SCALE CONTROL DB".Alarm_Overfill; 
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+      L     "GLUE SCALE CONTROL DB".AlarmLimit_Overfill;
+      >I    ;
+      S     "GLUE SCALE CONTROL DB".Alarm_Overfill;
 
 NETWORK
 TITLE =Underfill check - start 5s settle timer on valve close (falling 
@@ -246,10 +250,10 @@ TITLE =Underfill alarm - latch if weight still below limit when timer e
 
       A     T     50; 
       JCN   SKPU; 
-      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
-      L     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill; 
-      <R    ; 
-      S     "GLUE SCALE CONTROL DB".Alarm_Underfill; 
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+      L     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill;
+      <I    ;
+      S     "GLUE SCALE CONTROL DB".Alarm_Underfill;
 SKPU: NOP   0; 
 
 NETWORK
