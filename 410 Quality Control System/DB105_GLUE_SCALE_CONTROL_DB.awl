@@ -78,7 +78,18 @@ TITLE =Glue Scale Weight Control and Alarms
 //   transaction, no reason to touch its type here.
 //   Initial values below carry the same live-tuned numbers forward in
 //   their new INT/DINT representation - no setpoint value changed.
-VERSION : 0.6
+//
+// v0.7 changes vs v0.6 - synced against a fresh online capture
+//   (2026-09-25): SpareReal1, SpareReal2 and SpareReal3 appeared online,
+//   added directly after SpareReal (4 REAL spares total now, offsets
+//   16.0/20.0/24.0/28.0) - same "operator edits online, source catches
+//   up after" pattern as v0.3. Pushes the BOOL block back out to byte
+//   32 (Alarm_ScaleFault is DBX32.6 again, not DBX20.6 as v0.6 alone
+//   would have compiled to) - confirmed against the online Address
+//   column, not assumed. Not wired to anything - same
+//   unused/reserved status as the original SpareReal, no confirmed
+//   intended behavior for any of the four.
+VERSION : 0.7
 
   STRUCT
    GrossWeight_Actual : INT ;	//Parsed live weight from KWS CY300 scale (kg) - whole kg, scale's decimal digit is discarded (see FC155)
@@ -89,6 +100,9 @@ VERSION : 0.6
    NegativeUnderScore_Value : DINT ;	//Fixed sentinel value the KWS CY300 sends when its reading is negative (scale fault) - DINT, not INT: 5222222 doesn't fit in 16 bits - see FC155
    Hysteresis : INT ;	//Reserved - no longer read by FC155's valve network (see v0.3 changelog); kept for struct-layout compatibility
    SpareReal : REAL ;
+   SpareReal1 : REAL ;	//NEW v0.7 - appeared online, not yet wired to anything
+   SpareReal2 : REAL ;	//NEW v0.7 - appeared online, not yet wired to anything
+   SpareReal3 : REAL ;	//NEW v0.7 - appeared online, not yet wired to anything
    Valve_Open : BOOL ;	//Output: TRUE = valve open, filling in progress
    Alarm_Overfill : BOOL ;	//Output: TRUE = weight exceeded overfill limit (latching)
    Alarm_Underfill : BOOL ;	//Output: TRUE = weight below underfill limit at settle check (latching)
@@ -107,6 +121,9 @@ BEGIN
    NegativeUnderScore_Value := L#5222222;
    Hysteresis := 2;
    SpareReal := 0.0;
+   SpareReal1 := 0.0;
+   SpareReal2 := 0.0;
+   SpareReal3 := 0.0;
    Valve_Open := FALSE;
    Alarm_Overfill := FALSE;
    Alarm_Underfill := FALSE;

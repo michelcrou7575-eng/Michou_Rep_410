@@ -86,7 +86,7 @@ telegram.
 - `DB4_ABC3000A_DB.awl` — 20-byte raw telegram buffer, filled by SFC14.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
   limits, scale-fault sentinel, valve/alarm output bits, alarm reset.
-  Version 0.6. Symbol is `"GLUE SCALE CONTROL DB"` (spaces) to match what
+  Version 0.7. Symbol is `"GLUE SCALE CONTROL DB"` (spaces) to match what
   FC155 actually references.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.
@@ -98,6 +98,6 @@ telegram.
 - HMI button/screen wiring to pulse `Reset_Alarms` — the PLC-side reset
   logic exists, nothing drives the bit yet.
 - Confirm T50 isn't used elsewhere in the 410 project.
-- `Hysteresis`, `SpareReal`, and `Scale_Powered_On` exist in DB105 but
-  aren't wired to anything in FC155 yet — no confirmed intended behavior
-  for any of them.
+- `Hysteresis`, `SpareReal`/`SpareReal1`/`SpareReal2`/`SpareReal3`, and
+  `Scale_Powered_On` exist in DB105 but aren't wired to anything in FC155
+  yet — no confirmed intended behavior for any of them.
