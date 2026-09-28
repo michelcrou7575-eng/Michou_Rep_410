@@ -38,12 +38,12 @@ Anybus Communicator --PROFIBUS DP (node addr 4)--> Siemens S7-315-2 DP CPU
 | 9-10 | `k`,`g` |
 | 11-19 | Padding (0x00 / spaces) |
 
-FC104 parses Byte_0-6 and Byte_8 into `GLUE_SCALE_CONTROL_DB.GrossWeight_Actual : REAL`.
+FC155 parses Byte_0-6 and Byte_8 into `"GLUE SCALE CONTROL DB".GrossWeight_Actual : REAL`.
 Byte_7/9/10 are checked against their fixed values each scan; any mismatch
 (or a non-zero SFC14 RET_VAL) sets `ParseError` and holds the last-good
 weight/valve/alarm state rather than acting on a bad telegram.
 
-## Control logic (GLUE_SCALE_CONTROL_DB / DB105)
+## Control logic ("GLUE SCALE CONTROL DB" / DB105)
 
 - **Valve_Open**: two explicit thresholds, no separate hysteresis
   subtraction. Opens when `GrossWeight_Actual < Fill_Start_SP`; closes at
@@ -69,39 +69,26 @@ weight/valve/alarm state rather than acting on a bad telegram.
 
 ## Files
 
-- `FC104_GLUE_SCALE.awl` — SFC14 reads, ASCII parse, valve control,
-  alarm latching and reset. Version 0.13.
+- `FC155 GLUE SCALE LOGIC` — canonical source. SFC14 reads, ASCII parse,
+  valve control, alarm latching and reset. STEP7 export of the live PLC's
+  actual block — logic-identical to the now-deleted FC104_GLUE_SCALE.awl
+  v0.13; FC104 was compiled, deployed, then renumbered FC104->FC155 and
+  renamed "GLUE_SCALE" -> "GLUE SCALE LOGIC" on the real PLC project.
 - `DB4_ABC3000A_DB.awl` — 20-byte raw telegram buffer, filled by SFC14.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
   limits, scale-fault sentinel, valve/alarm output bits, alarm reset.
-  Version 0.4.
+  Version 0.5. Symbol renamed `"GLUE SCALE CONTROL DB"` (spaces) to match
+  what FC155 actually references, same rename FC104->FC155 prompted.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.
 - `Anybus Communicator configuration *.conf` — exported gateway config;
   confirms the "GROSS FILTER" transaction/telegram layout is unchanged.
-- `FC155 GLUE SCALE LOGIC` — STEP7 export of the live PLC's actual block.
-  Logic is byte-for-byte identical to FC104_GLUE_SCALE.awl v0.13 (diffed
-  to confirm — only differences are cosmetic: SIMATIC Manager's own
-  export formatting, `CALL SFC 14` shown as `CALL "DPRD_DAT"`, and the
-  renamed symbols below). Means: FC104 was compiled and deployed, then
-  renumbered/renamed on the real PLC project. **Not yet reconciled** —
-  see next item.
 
 ## Still open
 
-- **FC104 vs FC155 duplication**: the real PLC now runs this logic as
-  FC155 "GLUE SCALE LOGIC" against a DB105 symbol renamed to "GLUE SCALE
-  CONTROL DB" (spaces, not underscores) — but this repo's tracked source
-  (`FC104_GLUE_SCALE.awl`, `DB105_GLUE_SCALE_CONTROL_DB.awl`) still uses
-  the old FC104/underscore naming. Two files carrying the same logic
-  under different names is a real risk of them silently drifting apart
-  on the next edit. Whether to rename the tracked source to match what's
-  live (FC155 / space-separated symbols), or keep FC104 as canonical and
-  treat FC155 as a one-off export, is a naming-convention call for
-  Michou to make — not made here.
 - HMI button/screen wiring to pulse `Reset_Alarms` — the PLC-side reset
   logic exists, nothing drives the bit yet.
 - Confirm T50 isn't used elsewhere in the 410 project.
 - `Hysteresis`, `SpareReal`, and `Scale_Powered_On` exist in DB105 but
-  aren't wired to anything in FC104 yet — no confirmed intended behavior
+  aren't wired to anything in FC155 yet — no confirmed intended behavior
   for any of them.

@@ -1,4 +1,4 @@
-DATA_BLOCK "GLUE_SCALE_CONTROL_DB"    DB105
+DATA_BLOCK "GLUE SCALE CONTROL DB"    DB105
 TITLE =Glue Scale Weight Control and Alarms
 // v0.3 changes vs v0.2 - synced against the live online DB (see
 //   DB105_Online_1.xps, captured 2026-09-17): these fields were added/
@@ -45,7 +45,19 @@ TITLE =Glue Scale Weight Control and Alarms
 //     latch network is free to re-set it the very next scan if the
 //     underlying fault is still present - it cannot be permanently
 //     masked by holding the button down.
-VERSION : 0.4
+//
+// v0.5 changes vs v0.4 - canonicalize on FC155 (per Michou's call):
+//   the live PLC project compiled this DB's owning FUNCTION as FC104,
+//   then renumbered it FC155 "GLUE SCALE LOGIC" and renamed this DB's
+//   own symbol from "GLUE_SCALE_CONTROL_DB" to "GLUE SCALE CONTROL DB"
+//   (spaces, matching FC155's actual CALL/read references - confirmed
+//   by diffing FC155's STEP7 export against FC104_GLUE_SCALE.awl v0.13:
+//   logic is byte-for-byte identical, only the block number and symbol
+//   names differ). FC104_GLUE_SCALE.awl is deleted from this repo -
+//   FC155 is now the sole tracked source for this logic. Only this
+//   DATA_BLOCK header line changed (symbol name); every field, offset,
+//   and initial value below is unchanged from v0.4.
+VERSION : 0.5
 
   STRUCT
    GrossWeight_Actual : REAL ;	//Parsed live weight from KWS CY300 scale (kg)
@@ -53,15 +65,15 @@ VERSION : 0.4
    Fill_Stop_SP : REAL ;	//Operator-entered fill-stop weight (kg) - valve closes at/above this - HMI writable
    AlarmLimit_Overfill : REAL ;	//Operator-entered max allowed weight (kg) - HMI writable
    AlarmLimit_Underfill : REAL ;	//Operator-entered min allowed weight (kg) - HMI writable
-   NegativeUnderScore_Value : REAL ;	//Fixed sentinel value the KWS CY300 sends when its reading is negative (scale fault) - see FC104
-   Hysteresis : REAL ;	//Reserved - no longer read by FC104's valve network (see v0.3 changelog); kept for struct-layout compatibility
+   NegativeUnderScore_Value : REAL ;	//Fixed sentinel value the KWS CY300 sends when its reading is negative (scale fault) - see FC155
+   Hysteresis : REAL ;	//Reserved - no longer read by FC155's valve network (see v0.3 changelog); kept for struct-layout compatibility
    SpareReal : REAL ;
    Valve_Open : BOOL ;	//Output: TRUE = valve open, filling in progress
    Alarm_Overfill : BOOL ;	//Output: TRUE = weight exceeded overfill limit (latching)
    Alarm_Underfill : BOOL ;	//Output: TRUE = weight below underfill limit at settle check (latching)
    ParseError : BOOL ;	//Output: TRUE = ASCII parse failed this scan (bad/garbled scale data)
    Valve_Open_Prev : BOOL ;	//Internal: previous scan Valve_Open state, for edge detection
-   Scale_Powered_On : BOOL ;	//Live Data Coming In - not yet wired by FC104
+   Scale_Powered_On : BOOL ;	//Live Data Coming In - not yet wired by FC155
    Alarm_ScaleFault : BOOL ;	//Output: TRUE = GrossWeight_Actual matched NegativeUnderScore_Value this scan - scale reporting a negative/fault reading (latching)
    Reset_Alarms : BOOL ;	//Input: HMI-driven, hold/pulse TRUE to clear Alarm_Overfill, Alarm_Underfill and Alarm_ScaleFault
   END_STRUCT ;

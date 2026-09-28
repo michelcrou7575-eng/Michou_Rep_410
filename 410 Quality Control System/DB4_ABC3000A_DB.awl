@@ -1,8 +1,11 @@
 DATA_BLOCK "ABC3000A_DB"    DB4
 TITLE =
-VERSION : 0.4
+VERSION : 0.5
+// v0.5 - doc-only: owning block renumbered/renamed FC104 -> FC155
+//   "GLUE SCALE LOGIC" on the live PLC (see DB105 v0.5 changelog);
+//   comment below updated to match, no field/offset change.
 //Anybus Communicator (PROFIBUS) telegram buffer - KILO TECK KWS CY300 glue scale
-//Populated by FC104 via SFC14 DPRD_DAT, NOT by direct IB/PIB access
+//Populated by FC155 via SFC14 DPRD_DAT, NOT by direct IB/PIB access
 //Layout: Byte_0..6 = right-justified space-padded integer part (ASCII)
 //        Byte_7    = '.' (0x2E, decimal point, fixed)
 //        Byte_8    = decimal digit (ASCII)
