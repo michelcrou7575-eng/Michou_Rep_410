@@ -74,12 +74,31 @@ telegram.
   of the block, so a latched fault can always be cleared. The PLC side
   is wired; connecting an actual HMI button to this bit is still open.
 
+## HMI bridge ("HMI DB" / DB10)
+
+FC155 also mirrors three fields to/from `"HMI DB"` (DB10) every scan,
+unconditionally (not gated by ParseError/Alarm_ScaleFault):
+
+- `"HMI DB".Fill_Start_Weight_SP` → `Fill_Start_SP` and
+  `"HMI DB".Fill_Stop_Weight_SP` → `Fill_Stop_SP` — operator-entered
+  setpoints flow HMI → scale.
+- `GrossWeight_Actual` → `"HMI DB".Actual_Glue_Weight` — the live reading
+  flows scale → HMI, for display.
+
+`"HMI DB"` and DB105 both happen to have 5 consecutive INT fields at
+offsets 0/2/4/6/8, but only these three pairs are the same quantity —
+`"HMI DB".Actual_Transfered_Weight`/`Bottomer_Velocity` (6.0/8.0) and
+DB105's `AlarmLimit_Overfill`/`AlarmLimit_Underfill` (6.0/8.0) are
+unrelated fields that only share a byte offset by coincidence. The sync
+is wired by symbol name, one field at a time — never as a block copy
+across the matching address range.
+
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.14. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.15. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), valve control, alarm
-  latching and reset. Originated as a STEP7 export of the live PLC's
-  actual block — logic was identical to the now-deleted
+  latching and reset, HMI DB bridge. Originated as a STEP7 export of the
+  live PLC's actual block — logic was identical to the now-deleted
   FC104_GLUE_SCALE.awl v0.13 at that point; FC104 was compiled, deployed,
   then renumbered FC104->FC155 and renamed "GLUE_SCALE" ->
   "GLUE SCALE LOGIC" on the real PLC project.
@@ -92,6 +111,9 @@ telegram.
   sync the offline source after live-side field edits.
 - `Anybus Communicator configuration *.conf` — exported gateway config;
   confirms the "GROSS FILTER" transaction/telegram layout is unchanged.
+- `HMI DB 10` — the HMI comms DB (DB10), owned by FC160, not this
+  project's source of truth. Referenced here only because FC155's HMI
+  bridge (above) reads/writes three of its fields by symbol name.
 
 ## Still open
 

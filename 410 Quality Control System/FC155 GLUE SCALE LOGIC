@@ -70,7 +70,32 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms FC155
 //     comparisons (<R/>=R/>R) to INT comparisons (<I/>=I/>I) to match
 //     DB105's new field types. No logic/threshold change - same
 //     open-below-Fill_Start_SP, close-at/above-Fill_Stop_SP behavior.
-VERSION : 0.14
+//
+// v0.15 changes vs v0.14 - bridge to "HMI DB" (DB10), per Michou's call
+//   to wire this here rather than in FC160 or a new block:
+//   - NEW network "Sync HMI setpoints -> scale setpoints", placed first
+//     (before the DPRD_DAT reads even complete/validate) - unconditional,
+//     runs every scan regardless of ParseError/Alarm_ScaleFault, since
+//     it's just mirroring operator-entered HMI input into the setpoints
+//     FC155's own valve-control networks read; not tied to this scan's
+//     telegram state at all.
+//   - NEW network "Mirror parsed weight -> HMI DB", placed right after
+//     "Store final weight" so it reflects this scan's just-computed
+//     GrossWeight_Actual. Unconditional, same reasoning as
+//     GrossWeight_Actual itself (see v0.12: it isn't held back on
+//     ParseError either - it just gets whatever the byte parse
+//     produced this scan).
+//   - Only 3 of "HMI DB"'s and DB105's fields actually correspond by
+//     meaning despite both having 5 consecutive INT fields at offsets
+//     0/2/4/6/8: Actual_Glue_Weight<->GrossWeight_Actual (0.0),
+//     Fill_Start_Weight_SP<->Fill_Start_SP (2.0), Fill_Stop_Weight_SP
+//     <->Fill_Stop_SP (4.0). "HMI DB".Actual_Transfered_Weight/
+//     Bottomer_Velocity (6.0/8.0) and DB105.AlarmLimit_Overfill/
+//     AlarmLimit_Underfill (6.0/8.0) are unrelated fields that only
+//     happen to share the same byte offsets - deliberately wired by
+//     symbol name below, one field at a time, not as a block copy
+//     across the matching address range.
+VERSION : 0.15
 
 
 VAR_TEMP
@@ -82,6 +107,17 @@ VAR_TEMP
   LoopIndex : INT ;
 END_VAR
 BEGIN
+NETWORK
+TITLE =Sync HMI setpoints -> scale setpoints (unconditional, every scan)
+// Only these two fields correspond between "HMI DB" and DB105 - see
+// v0.15 changelog for why the other same-offset fields must NOT be
+// copied this way.
+      L     "HMI DB".Fill_Start_Weight_SP;
+      T     "GLUE SCALE CONTROL DB".Fill_Start_SP;
+
+      L     "HMI DB".Fill_Stop_Weight_SP;
+      T     "GLUE SCALE CONTROL DB".Fill_Stop_SP;
+
 NETWORK
 TITLE =Read 16-byte consistent block (IB272-287) via DPRD_DAT
 
@@ -191,6 +227,12 @@ TITLE =Store final weight - Byte_8's decimal digit is discarded, INT resolution 
 
       L     #IntPart;
       T     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+
+NETWORK
+TITLE =Mirror parsed weight -> HMI DB (unconditional, for display)
+
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+      T     "HMI DB".Actual_Glue_Weight;
 
 NETWORK
 TITLE =Skip valve/alarm update if parse failed or scale fault latched t
