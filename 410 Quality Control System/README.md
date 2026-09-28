@@ -79,9 +79,26 @@ weight/valve/alarm state rather than acting on a bad telegram.
   sync the offline source after live-side field edits.
 - `Anybus Communicator configuration *.conf` — exported gateway config;
   confirms the "GROSS FILTER" transaction/telegram layout is unchanged.
+- `FC155 GLUE SCALE LOGIC` — STEP7 export of the live PLC's actual block.
+  Logic is byte-for-byte identical to FC104_GLUE_SCALE.awl v0.13 (diffed
+  to confirm — only differences are cosmetic: SIMATIC Manager's own
+  export formatting, `CALL SFC 14` shown as `CALL "DPRD_DAT"`, and the
+  renamed symbols below). Means: FC104 was compiled and deployed, then
+  renumbered/renamed on the real PLC project. **Not yet reconciled** —
+  see next item.
 
 ## Still open
 
+- **FC104 vs FC155 duplication**: the real PLC now runs this logic as
+  FC155 "GLUE SCALE LOGIC" against a DB105 symbol renamed to "GLUE SCALE
+  CONTROL DB" (spaces, not underscores) — but this repo's tracked source
+  (`FC104_GLUE_SCALE.awl`, `DB105_GLUE_SCALE_CONTROL_DB.awl`) still uses
+  the old FC104/underscore naming. Two files carrying the same logic
+  under different names is a real risk of them silently drifting apart
+  on the next edit. Whether to rename the tracked source to match what's
+  live (FC155 / space-separated symbols), or keep FC104 as canonical and
+  treat FC155 as a one-off export, is a naming-convention call for
+  Michou to make — not made here.
 - HMI button/screen wiring to pulse `Reset_Alarms` — the PLC-side reset
   logic exists, nothing drives the bit yet.
 - Confirm T50 isn't used elsewhere in the 410 project.
