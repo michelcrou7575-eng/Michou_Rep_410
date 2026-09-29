@@ -1,5 +1,5 @@
 DATA_BLOCK "HMI DB"
-TITLE =
+TITLE =   HMI DB10
 // v0.2 - Repurposed Spare_INT_121/122 (per the physical "Glue InFeed
 //   Manager" touch panel screen, which already has "Over Filled
 //   Weight"/"Under Filled Weight" setpoint fields with no DB10 field to
