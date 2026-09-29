@@ -1,0 +1,74 @@
+DATA_BLOCK "HMI DB"
+TITLE =
+VERSION : 0.1
+
+
+  STRUCT 	
+   Actual_Glue_Weight : INT ;	//Actual Glue Weight [Kg]
+   Fill_Start_Weight_SP : INT ;	//Pump Start Glue Weight [Kg] - HMI Setpoint Input
+   Fill_Stop_Weight_SP : INT ;	//Pump Stop Glue  Weight [Kg] - HMI Setpoint Input
+   AlarmLimit_Overfill_SP : INT ;	//Operator-entered max allowed weight (kg) - HMI writable
+   AlarmLimit_Underfill_SP : INT ;	//Operator-entered min allowed weight (kg) - HMI writable
+   Actual_Transfered_Weight : INT ;	//Actual Glue Transfered Weight [Kg]
+   Bottomer_Velocity : INT ;	//Actual Bottomer Velocity [Tube/min]
+   Hot_Water_OnTime_SP : INT ;	//Hot Water OnTime [s] - HMI Setpoint Input
+   Hot_Water_OffTime_SP : INT ;	//Hot Water OffTime [s] - HMI Setpoint Input
+   Spare_INT : INT ;	
+   Spare_WORD1 : WORD ;	//Spare
+   Spare_WORD2 : WORD ;	//Spare
+   Screen_Number_Read : WORD ;	//Actual Screen Displayed - from HMI
+   Screen_Number_Cmd : WORD ;	//Screen Change - Command from PLC
+   Spare_WORD3 : WORD ;	//Spare
+   Glue_Fill_Pump_ON : BOOL ;	//Glue Fill Pump ON
+   Rotaliner_Enabled : BOOL ;	//Rotaliner Enabled
+   Bottomer_ON : BOOL ;	//Bottomer Running
+   Bottomer_Over_50 : BOOL ;	//Bottomer Running Over 50 [Tube/min]
+   Glue_Select_OK : BOOL ;	//Glue Selection OK !
+   Hot_Water_ON : BOOL ;	
+   Spare1 : BOOL ;	
+   Spare2 : BOOL ;	
+   Screen_Cmd_Trigger : BOOL ;	//Screen Change Trigger - Command from PLC
+   Glue_Fill_Pump_Test : BOOL ;	//Glue Fill Pump Test  
+   Spare_Bool_122 : BOOL ;	
+   Spare_Bool_123 : BOOL ;	
+   Spare_Bool_124 : BOOL ;	
+   Spare_Bool_125 : BOOL ;	
+   Spare_Bool_126 : BOOL ;	
+   Spare_Bool_127 : BOOL ;	
+   Spare_Bool_128 : BOOL ;	
+  END_STRUCT ;	
+BEGIN
+   Actual_Glue_Weight := 1; 
+   Fill_Start_Weight_SP := 0; 
+   Fill_Stop_Weight_SP := 0; 
+   AlarmLimit_Overfill_SP := 0; 
+   AlarmLimit_Underfill_SP := 0; 
+   Actual_Transfered_Weight := 0; 
+   Bottomer_Velocity := 0; 
+   Hot_Water_OnTime_SP := 0; 
+   Hot_Water_OffTime_SP := 0; 
+   Spare_INT := 0; 
+   Spare_WORD1 := W#16#0; 
+   Spare_WORD2 := W#16#0; 
+   Screen_Number_Read := W#16#0; 
+   Screen_Number_Cmd := W#16#0; 
+   Spare_WORD3 := W#16#0; 
+   Glue_Fill_Pump_ON := FALSE; 
+   Rotaliner_Enabled := FALSE; 
+   Bottomer_ON := FALSE; 
+   Bottomer_Over_50 := FALSE; 
+   Glue_Select_OK := FALSE; 
+   Hot_Water_ON := FALSE; 
+   Spare1 := FALSE; 
+   Spare2 := FALSE; 
+   Screen_Cmd_Trigger := FALSE; 
+   Glue_Fill_Pump_Test := FALSE; 
+   Spare_Bool_122 := FALSE; 
+   Spare_Bool_123 := FALSE; 
+   Spare_Bool_124 := FALSE; 
+   Spare_Bool_125 := FALSE; 
+   Spare_Bool_126 := FALSE; 
+   Spare_Bool_127 := FALSE; 
+   Spare_Bool_128 := FALSE; 
+END_DATA_BLOCK
+
