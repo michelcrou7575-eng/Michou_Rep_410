@@ -1,0 +1,343 @@
+FUNCTION "GLUE SCALE LOGIC" : VOID
+TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms FC155
+// v0.11 - Simplified "Parse integer part" network: replaced the 7
+//   duplicated digit-check blocks (Byte_0..Byte_6, one hand-unrolled
+//   per byte, ~140 lines) with a single indirect-addressed loop over
+//   Byte_0..Byte_5 plus a short unconditional block for Byte_6 - same
+//   LAR1/+AR1/DBB[AR1,P#x.y] indirect-addressing idiom this project
+//   already uses in FB1111/FB1112/FC130. Behavior is unchanged: leading
+//   spaces are skipped until the first digit (FoundDigit latches once
+//   set, matching v0.10), and Byte_6 - the field's last position - is
+//   still always parsed unconditionally, space or not. Also dropped a
+//   dead SET;=FoundDigit pair at the top that was immediately
+//   overwritten by the following CLR;=FoundDigit two lines later.
+//
+// v0.12 changes vs v0.11 - synced against DB105 v0.3 (see that block's
+//   changelog, and DB105_Online_1.xps captured 2026-09-17):
+//   - NEW network "Detect scale fault": the KWS CY300 sends a fixed
+//     sentinel value (all 7 digits of the Byte_0-6 field filled, no
+//     leading spaces - confirmed live at 5222222) instead of a real
+//     reading when its measurement goes negative. GrossWeight_Actual is
+//     compared against DB105's new NegativeUnderScore_Value constant
+//     every scan; a match latches Alarm_ScaleFault. Exact REAL equality
+//     is safe here specifically because both sides are integer-valued
+//     (no fractional digit) and well under 2^24 - bit-exact in IEEE754
+//     single precision, not the usual float-equality trap.
+//   - "Skip valve/alarm update" network now also gates on Alarm_ScaleFault,
+//     same as ParseError - a scale reporting its fault sentinel is not
+//     a real weight, so the valve must not react to it (freezes at
+//     last-good state, same as a garbled telegram) until an operator
+//     acknowledges/resets Alarm_ScaleFault via HMI (not yet wired - see
+//     README "Still open", same gap as the two existing alarms).
+//   - Valve control network retargeted from the retired Setpoint_Fill/
+//     Hysteresis pair to DB105's new Fill_Start_SP/Fill_Stop_SP: opens
+//     below Fill_Start_SP, closes at/above Fill_Stop_SP directly - no
+//     Hysteresis subtraction needed since the two setpoints already
+//     define the deadband.
+//
+// v0.13 changes vs v0.12 - HMI alarm reset (per DB105 v0.4):
+//   - NEW network "Reset latched alarms", placed after the SKIP: label
+//     so it always runs every scan regardless of this scan's
+//     ParseError/Alarm_ScaleFault skip state - a latched alarm must
+//     stay resettable even while it's actively freezing the rest of
+//     this block, otherwise Alarm_ScaleFault could never be cleared
+//     once it fires (it would perpetually skip past its own reset).
+//     Reads DB105.Reset_Alarms directly (level, not edge) - clears
+//     Alarm_Overfill/Alarm_Underfill/Alarm_ScaleFault together while
+//     TRUE; each alarm's own network re-latches next scan if its fault
+//     condition is still actually present, so this can't mask a live
+//     fault by holding the button down.
+//
+// v0.14 changes vs v0.13 - REAL -> INT for the scale weight/setpoints
+//   (per DB105 v0.6 - Michou's call: the scale transaction doesn't need
+//   fractional precision):
+//   - Byte_8 (the scale's decimal digit) is no longer parsed at all -
+//     #DecDigit and the REAL-math network that added it to
+//     GrossWeight_Actual are gone. #IntPart (still DINT internally,
+//     unchanged parse networks) is now stored directly into the INT
+//     GrossWeight_Actual via a plain T - same DINT-to-narrower-type
+//     truncation idiom already used elsewhere in this project (FC120's
+//     Actual_Velocity, FB1111's StateCode/BadStreakCount).
+//   - "Detect scale fault" now compares #IntPart directly (DINT, ==D)
+//     against NegativeUnderScore_Value (DINT), BEFORE the truncation
+//     into GrossWeight_Actual above - not the other way around. The
+//     sentinel 5222222 does not fit in 16-bit INT range, so comparing
+//     the already-truncated GrossWeight_Actual would compare a wrapped/
+//     corrupted value and could never match the real sentinel again.
+//     Order matters here: fault detection reads the wide temp, the INT
+//     store is a separate, later step.
+//   - Valve control, Overfill and Underfill networks switched from REAL
+//     comparisons (<R/>=R/>R) to INT comparisons (<I/>=I/>I) to match
+//     DB105's new field types. No logic/threshold change - same
+//     open-below-Fill_Start_SP, close-at/above-Fill_Stop_SP behavior.
+//
+// v0.15 changes vs v0.14 - bridge to "HMI DB" (DB10), per Michou's call
+//   to wire this here rather than in FC160 or a new block:
+//   - NEW network "Sync HMI setpoints -> scale setpoints", placed first
+//     (before the DPRD_DAT reads even complete/validate) - unconditional,
+//     runs every scan regardless of ParseError/Alarm_ScaleFault, since
+//     it's just mirroring operator-entered HMI input into the setpoints
+//     FC155's own valve-control networks read; not tied to this scan's
+//     telegram state at all.
+//   - NEW network "Mirror parsed weight -> HMI DB", placed right after
+//     "Store final weight" so it reflects this scan's just-computed
+//     GrossWeight_Actual. Unconditional, same reasoning as
+//     GrossWeight_Actual itself (see v0.12: it isn't held back on
+//     ParseError either - it just gets whatever the byte parse
+//     produced this scan).
+//   - Only 3 of "HMI DB"'s and DB105's fields actually correspond by
+//     meaning despite both having 5 consecutive INT fields at offsets
+//     0/2/4/6/8: Actual_Glue_Weight<->GrossWeight_Actual (0.0),
+//     Fill_Start_Weight_SP<->Fill_Start_SP (2.0), Fill_Stop_Weight_SP
+//     <->Fill_Stop_SP (4.0). "HMI DB".Actual_Transfered_Weight/
+//     Bottomer_Velocity (6.0/8.0) and DB105.AlarmLimit_Overfill/
+//     AlarmLimit_Underfill (6.0/8.0) are unrelated fields that only
+//     happen to share the same byte offsets - deliberately wired by
+//     symbol name below, one field at a time, not as a block copy
+//     across the matching address range.
+VERSION : 0.15
+
+
+VAR_TEMP
+  RetVal1 : INT ;	
+  RetVal2 : INT ;	
+  IntPart : DINT ;	
+  CharVal : INT ;	
+  FoundDigit : BOOL ;	
+  LoopIndex : INT ;	
+END_VAR
+BEGIN
+NETWORK
+TITLE =Sync HMI setpoints -> scale setpoints (unconditional, every scan
+// Only these two fields correspond between "HMI DB" and DB105 - see
+// v0.15 changelog for why the other same-offset fields must NOT be
+// copied this way.
+      L     "HMI DB".Fill_Start_Weight_SP; 
+      T     "GLUE SCALE CONTROL DB".Fill_Start_SP; 
+//;
+      L     "HMI DB".Fill_Stop_Weight_SP; 
+      T     "GLUE SCALE CONTROL DB".Fill_Stop_SP; 
+//;
+      L     "HMI DB".AlarmLimit_Overfill_SP; 
+      T     "GLUE SCALE CONTROL DB".AlarmLimit_Overfill_SP; 
+//;
+      L     "HMI DB".AlarmLimit_Underfill_SP; 
+      T     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill_SP; 
+//;
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual_Mem; 
+      -I    ; 
+      T     "HMI DB".Actual_Transfered_Weight; 
+//;
+      L     "RUN_DATA_DB".Web_Velocity_Filtered; // Tube Velocity
+      RND   ; 
+      T     "HMI DB".Bottomer_Velocity; // Normal or Leak flow ?
+NETWORK
+TITLE =HMI Button - UpDate
+
+      A     "HMI DB".Glue_Fill_Pump_Test; 
+      =     "OUTPUTS DB".GRN_LED; // Grn Lamp
+      =     "OUTPUTS DB".RED_LED; // Red Lamp
+      =     "OUTPUTS DB".WHT_SWL_1; // Turn on Lamp 1      
+      =     "OUTPUTS DB".WHT_SWL_2; // Turn on Lamp 2
+      =     "OUTPUTS DB".WHT_SWL_3; // Turn on Lamp 3
+      =     "HMI DB".Glue_Fill_Pump_ON; 
+NETWORK
+TITLE =Read 16-byte consistent block (IB272-287) via DPRD_DAT
+
+      CALL "DPRD_DAT" (
+           LADDR                    := W#16#110,
+           RET_VAL                  := #RetVal1,
+           RECORD                   := P#DB4.DBX0.0 BYTE 16);
+
+NETWORK
+TITLE =Read 4-byte consistent block (IB289-292) via DPRD_DAT
+
+      CALL "DPRD_DAT" (
+           LADDR                    := W#16#121,
+           RET_VAL                  := #RetVal2,
+           RECORD                   := P#DB4.DBX16.0 BYTE 4);
+
+NETWORK
+TITLE =Validate telegram - check RetVal and fixed markers (decimal poin
+
+      L     #RetVal1; 
+      L     0; 
+      <>I   ; 
+      L     #RetVal2; 
+      L     0; 
+      <>I   ; 
+      OW    ; 
+      L     "ABC3000A_DB".Byte_7; 
+      L     B#16#2E; 
+      <>I   ; 
+      OW    ; 
+      L     "ABC3000A_DB".Byte_9; 
+      L     B#16#6B; 
+      <>I   ; 
+      OW    ; 
+      L     "ABC3000A_DB".Byte_10; 
+      L     B#16#67; 
+      <>I   ; 
+      OW    ; 
+      =     "GLUE SCALE CONTROL DB".ParseError; 
+
+NETWORK
+TITLE =Parse integer part, Byte_0-5 - loop, skip leading spaces until f
+
+      CLR   ; 
+      =     #FoundDigit; 
+      L     0; 
+      T     #IntPart; 
+
+      OPN   "ABC3000A_DB"; 
+      LAR1  P#0.0; 
+
+      L     6; 
+LP1:  T     #LoopIndex; 
+
+      L     DBB [AR1,P#0.0]; 
+      L     B#16#20; 
+      <>I   ; 
+      S     #FoundDigit; 
+
+      A     #FoundDigit; 
+      JCN   ND1; 
+
+      L     DBB [AR1,P#0.0]; 
+      L     B#16#30; 
+      -I    ; 
+      T     #CharVal; 
+      L     #IntPart; 
+      L     10; 
+      *D    ; 
+      L     #CharVal; 
+      ITD   ; 
+      +D    ; 
+      T     #IntPart; 
+
+ND1:  +AR1  P#1.0; 
+
+      L     #LoopIndex; 
+      LOOP  LP1; 
+
+NETWORK
+TITLE =Parse integer part, Byte_6 - field's last position, always a dig
+
+      L     "ABC3000A_DB".Byte_6; 
+      L     B#16#30; 
+      -I    ; 
+      T     #CharVal; 
+      L     #IntPart; 
+      L     10; 
+      *D    ; 
+      L     #CharVal; 
+      ITD   ; 
+      +D    ; 
+      T     #IntPart; 
+
+NETWORK
+TITLE =Detect scale fault - raw parsed integer matches the scale's nega
+// Compares the wide #IntPart DINT temp, not GrossWeight_Actual - the
+// sentinel 5222222 doesn't fit in 16-bit INT range, so this must run
+// BEFORE #IntPart is truncated into the INT GrossWeight_Actual below.
+      L     #IntPart; 
+      L     DB105.DBD   10; 
+      ==D   ; 
+      S     "GLUE SCALE CONTROL DB".Alarm_ScaleFault; 
+
+NETWORK
+TITLE =Store final weight - Byte_8's decimal digit is discarded, INT re
+
+      L     #IntPart; 
+      T     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
+
+NETWORK
+TITLE =Mirror parsed weight -> HMI DB (unconditional, for display)
+
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
+      T     "HMI DB".Actual_Glue_Weight; 
+
+NETWORK
+TITLE =Skip valve/alarm update if parse failed or scale fault latched t
+
+      A     "GLUE SCALE CONTROL DB".ParseError; 
+      O     "GLUE SCALE CONTROL DB".Alarm_ScaleFault; 
+      JC    SKIP; 
+
+NETWORK
+TITLE =Valve control - open below Fill_Start_SP, close at/above Fill_St
+
+      A     "GLUE SCALE CONTROL DB".Valve_Open; 
+      JC    CHKC; 
+
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
+      L     "GLUE SCALE CONTROL DB".Fill_Start_SP; 
+      <I    ; 
+      JC    OPEN; 
+      JU    NXT1; 
+
+CHKC: L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
+      L     "GLUE SCALE CONTROL DB".Fill_Stop_SP; 
+      >=I   ; 
+      JC    CLOS; 
+      JU    NXT1; 
+
+OPEN: FP    "FP 200.6"; 
+      JCN   TRXF; 
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; // Load Memory
+      T     "GLUE SCALE CONTROL DB".GrossWeight_Actual_Mem; 
+
+TRXF: SET   ; 
+      S     "GLUE SCALE CONTROL DB".Valve_Open; 
+      JU    NXT1; 
+
+CLOS: SET   ; 
+      R     "GLUE SCALE CONTROL DB".Valve_Open; 
+
+NXT1: NOP   0; 
+NETWORK
+TITLE =Overfill alarm - latching, set on exceed, no auto-reset here
+
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
+      L     "GLUE SCALE CONTROL DB".AlarmLimit_Overfill_SP; 
+      >I    ; 
+      S     "GLUE SCALE CONTROL DB".Alarm_Overfill; 
+
+NETWORK
+TITLE =Underfill check - start 5s settle timer on valve close (falling 
+
+      A     "GLUE SCALE CONTROL DB".Valve_Open_Prev; 
+      AN    "GLUE SCALE CONTROL DB".Valve_Open; 
+      L     S5T#5S; 
+      SD    T     50; 
+
+      A     "GLUE SCALE CONTROL DB".Valve_Open; 
+      =     "GLUE SCALE CONTROL DB".Valve_Open_Prev; 
+
+NETWORK
+TITLE =Underfill alarm - latch if weight still below limit when timer e
+
+      A     T     50; 
+      JCN   SKPU; 
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; 
+      L     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill_SP; 
+      <I    ; 
+      S     "GLUE SCALE CONTROL DB".Alarm_Underfill; 
+SKPU: NOP   0; 
+
+NETWORK
+TITLE =Exit point for parse-error skip
+
+SKIP: NOP   0; 
+
+NETWORK
+TITLE =Reset latched alarms - HMI-driven, runs regardless of this scan'
+
+      A     "GLUE SCALE CONTROL DB".Reset_Alarms; 
+      R     "GLUE SCALE CONTROL DB".Alarm_Overfill; 
+      R     "GLUE SCALE CONTROL DB".Alarm_Underfill; 
+      R     "GLUE SCALE CONTROL DB".Alarm_ScaleFault; 
+
+END_FUNCTION
+
