@@ -76,26 +76,38 @@ telegram.
 
 ## HMI bridge ("HMI DB" / DB10)
 
-FC155 also mirrors three fields to/from `"HMI DB"` (DB10) every scan,
+FC155 mirrors five fields to/from `"HMI DB"` (DB10) every scan,
 unconditionally (not gated by ParseError/Alarm_ScaleFault):
 
-- `"HMI DB".Fill_Start_Weight_SP` → `Fill_Start_SP` and
-  `"HMI DB".Fill_Stop_Weight_SP` → `Fill_Stop_SP` — operator-entered
-  setpoints flow HMI → scale.
+- `"HMI DB".Fill_Start_Weight_SP` → `Fill_Start_SP`,
+  `"HMI DB".Fill_Stop_Weight_SP` → `Fill_Stop_SP`,
+  `"HMI DB".Overfill_Weight_SP` → `AlarmLimit_Overfill`, and
+  `"HMI DB".Underfill_Weight_SP` → `AlarmLimit_Underfill` — all four
+  operator-entered setpoints flow HMI → scale, one-way (the touch
+  panel's own numeric-entry widget is the display of record for what
+  was last typed, so nothing needs to be mirrored back for these).
 - `GrossWeight_Actual` → `"HMI DB".Actual_Glue_Weight` — the live reading
   flows scale → HMI, for display.
 
+The `Overfill_Weight_SP`/`Underfill_Weight_SP` pair didn't originally
+exist in DB10 — added (HMI DB v0.2) by repurposing two of its three
+`Spare_INT` slots, after the physical "Glue InFeed Manager" touch panel
+turned out to already have "Over Filled Weight"/"Under Filled Weight"
+setpoint fields on screen with nothing backing them.
+
 `"HMI DB"` and DB105 both happen to have 5 consecutive INT fields at
-offsets 0/2/4/6/8, but only these three pairs are the same quantity —
-`"HMI DB".Actual_Transfered_Weight`/`Bottomer_Velocity` (6.0/8.0) and
-DB105's `AlarmLimit_Overfill`/`AlarmLimit_Underfill` (6.0/8.0) are
-unrelated fields that only share a byte offset by coincidence. The sync
-is wired by symbol name, one field at a time — never as a block copy
-across the matching address range.
+offsets 0/2/4/6/8, but `"HMI DB".Actual_Transfered_Weight`/
+`Bottomer_Velocity` (6.0/8.0) and DB105's `AlarmLimit_Overfill`/
+`AlarmLimit_Underfill` (also 6.0/8.0) are unrelated fields that only
+share a byte offset by coincidence — `Overfill_Weight_SP`/
+`Underfill_Weight_SP` (the fields that actually correspond to
+`AlarmLimit_Overfill`/`AlarmLimit_Underfill`) live at 14.0/16.0 in
+DB10, not 6.0/8.0. The sync is wired by symbol name, one field at a
+time — never as a block copy across a matching address range.
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.15. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.16. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), valve control, alarm
   latching and reset, HMI DB bridge. Originated as a STEP7 export of the
   live PLC's actual block — logic was identical to the now-deleted
@@ -111,9 +123,9 @@ across the matching address range.
   sync the offline source after live-side field edits.
 - `Anybus Communicator configuration *.conf` — exported gateway config;
   confirms the "GROSS FILTER" transaction/telegram layout is unchanged.
-- `HMI DB 10` — the HMI comms DB (DB10), owned by FC160, not this
-  project's source of truth. Referenced here only because FC155's HMI
-  bridge (above) reads/writes three of its fields by symbol name.
+- `HMI DB 10` — the HMI comms DB (DB10), version 0.2, owned by FC160,
+  not this project's source of truth. Referenced here because FC155's
+  HMI bridge (above) reads/writes five of its fields by symbol name.
 
 ## Still open
 

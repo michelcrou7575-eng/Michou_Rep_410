@@ -95,7 +95,19 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms FC155
 //     happen to share the same byte offsets - deliberately wired by
 //     symbol name below, one field at a time, not as a block copy
 //     across the matching address range.
-VERSION : 0.15
+//
+// v0.16 changes vs v0.15 - extend the HMI bridge to the overfill/
+//   underfill setpoints, per the physical "Glue InFeed Manager" touch
+//   panel screen (has "Over Filled Weight"/"Under Filled Weight" fields
+//   that had no DB10 backing at all until DB105 HMI DB v0.2):
+//   - "Sync HMI setpoints -> scale setpoints" gains two more transfers:
+//     "HMI DB".Overfill_Weight_SP -> AlarmLimit_Overfill, "HMI DB".
+//     Underfill_Weight_SP -> AlarmLimit_Underfill. Same one-way,
+//     unconditional pattern as Fill_Start_SP/Fill_Stop_SP - the touch
+//     panel's own numeric-entry widget is the display of record for
+//     what was last typed, so no mirror back is needed (matches why
+//     Fill_Start_SP/Fill_Stop_SP were never mirrored back either).
+VERSION : 0.16
 
 
 VAR_TEMP
@@ -109,14 +121,20 @@ END_VAR
 BEGIN
 NETWORK
 TITLE =Sync HMI setpoints -> scale setpoints (unconditional, every scan)
-// Only these two fields correspond between "HMI DB" and DB105 - see
-// v0.15 changelog for why the other same-offset fields must NOT be
+// Only these fields correspond between "HMI DB" and DB105 - see v0.15/
+// v0.16 changelogs for why the other same-offset fields must NOT be
 // copied this way.
       L     "HMI DB".Fill_Start_Weight_SP;
       T     "GLUE SCALE CONTROL DB".Fill_Start_SP;
 
       L     "HMI DB".Fill_Stop_Weight_SP;
       T     "GLUE SCALE CONTROL DB".Fill_Stop_SP;
+
+      L     "HMI DB".Overfill_Weight_SP;
+      T     "GLUE SCALE CONTROL DB".AlarmLimit_Overfill;
+
+      L     "HMI DB".Underfill_Weight_SP;
+      T     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill;
 
 NETWORK
 TITLE =Read 16-byte consistent block (IB272-287) via DPRD_DAT

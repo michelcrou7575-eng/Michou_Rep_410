@@ -1,9 +1,18 @@
 DATA_BLOCK "HMI DB"
 TITLE =
-VERSION : 0.1
+// v0.2 - Repurposed Spare_INT_121/122 (per the physical "Glue InFeed
+//   Manager" touch panel screen, which already has "Over Filled
+//   Weight"/"Under Filled Weight" setpoint fields with no DB10 field to
+//   back them) as Overfill_Weight_SP/Underfill_Weight_SP - same naming
+//   convention as DB105's AlarmLimit_Overfill/AlarmLimit_Underfill,
+//   which FC155's HMI bridge now also syncs these into. Spare_INT_123
+//   left as-is. No offset shift for anything else in this DB - same
+//   reuse-existing-spare-slot pattern already used on DB105/DB640/DB20
+//   rather than appending at the end and shifting Data_Write onward
+//   (which FC160 depends on for screen switching).
+VERSION : 0.2
 
-
-  STRUCT 	
+  STRUCT
    Actual_Glue_Weight : INT ;	//Actual Glue Weight [Kg]
    Fill_Start_Weight_SP : INT ;	//Pump Start Glue Weight [Kg] - HMI Setpoint Input
    Fill_Stop_Weight_SP : INT ;	//Pump Stop Glue  Weight [Kg] - HMI Setpoint Input
@@ -11,9 +20,9 @@ VERSION : 0.1
    Bottomer_Velocity : INT ;	//Actual Bottomer Velocity [Tube/min]
    Hot_Water_OnTime_SP : INT ;	//Hot Water OnTime [s] - HMI Setpoint Input
    Hot_Water_OffTime_SP : INT ;	//Hot Water OffTime [s] - HMI Setpoint Input
-   Spare_INT_121 : INT ;	
-   Spare_INT_122 : INT ;	
-   Spare_INT_123 : INT ;	
+   Overfill_Weight_SP : INT ;	//Over Filled Weight [Kg] - HMI Setpoint Input (was Spare_INT_121) - synced to DB105.AlarmLimit_Overfill by FC155
+   Underfill_Weight_SP : INT ;	//Under Filled Weight [Kg] - HMI Setpoint Input (was Spare_INT_122) - synced to DB105.AlarmLimit_Underfill by FC155
+   Spare_INT_123 : INT ;
    Data_Write : WORD ;	//Commands from HMI - Bool
    Data_Read : WORD ;	//Status from PLC - Bool
    Screen_Number_Read : WORD ;	//Actual Screen Displayed - from HMI
@@ -42,11 +51,11 @@ BEGIN
    Fill_Stop_Weight_SP := 0; 
    Actual_Transfered_Weight := 432; 
    Bottomer_Velocity := 0; 
-   Hot_Water_OnTime_SP := 0; 
-   Hot_Water_OffTime_SP := 0; 
-   Spare_INT_121 := 0; 
-   Spare_INT_122 := 0; 
-   Spare_INT_123 := 0; 
+   Hot_Water_OnTime_SP := 0;
+   Hot_Water_OffTime_SP := 0;
+   Overfill_Weight_SP := 0;
+   Underfill_Weight_SP := 0;
+   Spare_INT_123 := 0;
    Data_Write := W#16#0; 
    Data_Read := W#16#0; 
    Screen_Number_Read := W#16#0; 
