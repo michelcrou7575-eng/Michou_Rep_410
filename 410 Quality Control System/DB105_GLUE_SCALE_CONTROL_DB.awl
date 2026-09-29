@@ -1,5 +1,5 @@
-DATA_BLOCK "GLUE SCALE CONTROL DB"    DB105
-TITLE =Glue Scale Weight Control and Alarms
+DATA_BLOCK "GLUE SCALE CONTROL DB"    
+TITLE =Glue Scale Weight Control and Alarms  DB105
 // v0.3 changes vs v0.2 - synced against the live online DB (see
 //   DB105_Online_1.xps, captured 2026-09-17): these fields were added/
 //   renamed directly online, ahead of this source file. Brought back in
