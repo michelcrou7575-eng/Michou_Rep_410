@@ -10,72 +10,95 @@ TITLE =
 //   reuse-existing-spare-slot pattern already used on DB105/DB640/DB20
 //   rather than appending at the end and shifting Data_Write onward
 //   (which FC160 depends on for screen switching).
-VERSION : 0.2
+//
+// v0.3 - synced against Michou's own online rebuild (uploaded as
+//   root-level "DB10", 2026-09-29), which restructured this DB directly
+//   rather than following v0.2's minimal-diff approach:
+//   - Overfill_Weight_SP/Underfill_Weight_SP renamed
+//     AlarmLimit_Overfill_SP/AlarmLimit_Underfill_SP, matching the
+//     rename Michou also made to DB105's own fields (see DB105 v0.8).
+//   - Data_Write/Data_Read (WORD) removed - confirmed nothing in this
+//     project ever referenced either symbolically, so this wasn't a
+//     live signal getting dropped.
+//   - Spare_INT_121/122/123 (three separate spares) collapsed to a
+//     single Spare_INT.
+//   - Bools substantially reordered: Glue_Fill_Pump_ON moved up next to
+//     the WORD screen fields, Glue_Fill_Pump_Test moved down near the
+//     new spare bools, Spare_Bool_12/121 renamed Spare1/Spare2. Since
+//     FC155 and FC160 both reference every field here by symbol name,
+//     not raw offset, this reorder is safe as long as both are
+//     recompiled against this same struct - already true, both were
+//     uploaded from the live, working PLC project.
+//   - This struct no longer matches v0.2's offsets at all; re-verify
+//     against the online Address column before assuming any specific
+//     byte position.
+VERSION : 0.3
 
   STRUCT
    Actual_Glue_Weight : INT ;	//Actual Glue Weight [Kg]
-   Fill_Start_Weight_SP : INT ;	//Pump Start Glue Weight [Kg] - HMI Setpoint Input
-   Fill_Stop_Weight_SP : INT ;	//Pump Stop Glue  Weight [Kg] - HMI Setpoint Input
-   Actual_Transfered_Weight : INT ;	//Actual Glue Transfered Weight [Kg]
-   Bottomer_Velocity : INT ;	//Actual Bottomer Velocity [Tube/min]
+   Fill_Start_Weight_SP : INT ;	//Pump Start Glue Weight [Kg] - HMI Setpoint Input - synced to DB105.Fill_Start_SP by FC155
+   Fill_Stop_Weight_SP : INT ;	//Pump Stop Glue  Weight [Kg] - HMI Setpoint Input - synced to DB105.Fill_Stop_SP by FC155
+   AlarmLimit_Overfill_SP : INT ;	//Over Filled Weight [Kg] - HMI Setpoint Input - synced to DB105.AlarmLimit_Overfill_SP by FC155
+   AlarmLimit_Underfill_SP : INT ;	//Under Filled Weight [Kg] - HMI Setpoint Input - synced to DB105.AlarmLimit_Underfill_SP by FC155
+   Actual_Transfered_Weight : INT ;	//Actual Glue Transfered Weight [Kg] since the pump last started - GrossWeight_Actual minus GrossWeight_Actual_Mem, written by FC155
+   Bottomer_Velocity : INT ;	//Actual Bottomer Velocity [Tube/min] - mirrors "RUN_DATA_DB".Web_Velocity_Filtered (410 seam-AGC subsystem), written by FC155
    Hot_Water_OnTime_SP : INT ;	//Hot Water OnTime [s] - HMI Setpoint Input
    Hot_Water_OffTime_SP : INT ;	//Hot Water OffTime [s] - HMI Setpoint Input
-   Overfill_Weight_SP : INT ;	//Over Filled Weight [Kg] - HMI Setpoint Input (was Spare_INT_121) - synced to DB105.AlarmLimit_Overfill by FC155
-   Underfill_Weight_SP : INT ;	//Under Filled Weight [Kg] - HMI Setpoint Input (was Spare_INT_122) - synced to DB105.AlarmLimit_Underfill by FC155
-   Spare_INT_123 : INT ;
-   Data_Write : WORD ;	//Commands from HMI - Bool
-   Data_Read : WORD ;	//Status from PLC - Bool
+   Spare_INT : INT ;
+   Spare_WORD1 : WORD ;	//Spare
+   Spare_WORD2 : WORD ;	//Spare
    Screen_Number_Read : WORD ;	//Actual Screen Displayed - from HMI
    Screen_Number_Cmd : WORD ;	//Screen Change - Command from PLC
-   Screen_Cmd_Trigger : BOOL ;	//Screen Change Trigger - Command from PLC
+   Spare_WORD3 : WORD ;	//Spare
+   Glue_Fill_Pump_ON : BOOL ;	//Glue Fill Pump ON - real pump output, written by FC155 (automatic Pump_ON OR Glue_Fill_Pump_Test)
    Rotaliner_Enabled : BOOL ;	//Rotaliner Enabled
    Bottomer_ON : BOOL ;	//Bottomer Running
    Bottomer_Over_50 : BOOL ;	//Bottomer Running Over 50 [Tube/min]
    Glue_Select_OK : BOOL ;	//Glue Selection OK !
-   Glue_Fill_Pump_Test : BOOL ;	//Glue Fill Pump Test  
-   Glue_Fill_Pump_ON : BOOL ;	//Glue Fill Pump On  
-   Hot_Water_ON : BOOL ;	
-   Spare_Bool_12 : BOOL ;	
-   Spare_Bool_121 : BOOL ;	
-   Spare_Bool_122 : BOOL ;	
-   Spare_Bool_123 : BOOL ;	
-   Spare_Bool_124 : BOOL ;	
-   Spare_Bool_125 : BOOL ;	
-   Spare_Bool_126 : BOOL ;	
-   Spare_Bool_127 : BOOL ;	
-   Spare_Bool_128 : BOOL ;	
-  END_STRUCT ;	
+   Hot_Water_ON : BOOL ;
+   Spare1 : BOOL ;
+   Spare2 : BOOL ;
+   Screen_Cmd_Trigger : BOOL ;	//Screen Change Trigger - Command from PLC
+   Glue_Fill_Pump_Test : BOOL ;	//Glue Fill Pump Test - manual override, forces Glue_Fill_Pump_ON on regardless of automatic Pump_ON, read by FC155
+   Spare_Bool_122 : BOOL ;
+   Spare_Bool_123 : BOOL ;
+   Spare_Bool_124 : BOOL ;
+   Spare_Bool_125 : BOOL ;
+   Spare_Bool_126 : BOOL ;
+   Spare_Bool_127 : BOOL ;
+   Spare_Bool_128 : BOOL ;
+  END_STRUCT ;
 BEGIN
-   Actual_Glue_Weight := 0; 
-   Fill_Start_Weight_SP := 0; 
-   Fill_Stop_Weight_SP := 0; 
-   Actual_Transfered_Weight := 432; 
-   Bottomer_Velocity := 0; 
+   Actual_Glue_Weight := 0;
+   Fill_Start_Weight_SP := 0;
+   Fill_Stop_Weight_SP := 0;
+   AlarmLimit_Overfill_SP := 0;
+   AlarmLimit_Underfill_SP := 0;
+   Actual_Transfered_Weight := 0;
+   Bottomer_Velocity := 0;
    Hot_Water_OnTime_SP := 0;
    Hot_Water_OffTime_SP := 0;
-   Overfill_Weight_SP := 0;
-   Underfill_Weight_SP := 0;
-   Spare_INT_123 := 0;
-   Data_Write := W#16#0; 
-   Data_Read := W#16#0; 
-   Screen_Number_Read := W#16#0; 
-   Screen_Number_Cmd := W#16#0; 
-   Screen_Cmd_Trigger := FALSE; 
-   Rotaliner_Enabled := FALSE; 
-   Bottomer_ON := FALSE; 
-   Bottomer_Over_50 := FALSE; 
-   Glue_Select_OK := FALSE; 
-   Glue_Fill_Pump_Test := FALSE; 
-   Glue_Fill_Pump_ON := FALSE; 
-   Hot_Water_ON := FALSE; 
-   Spare_Bool_12 := FALSE; 
-   Spare_Bool_121 := FALSE; 
-   Spare_Bool_122 := FALSE; 
-   Spare_Bool_123 := FALSE; 
-   Spare_Bool_124 := FALSE; 
-   Spare_Bool_125 := FALSE; 
-   Spare_Bool_126 := FALSE; 
-   Spare_Bool_127 := FALSE; 
-   Spare_Bool_128 := FALSE; 
+   Spare_INT := 0;
+   Spare_WORD1 := W#16#0;
+   Spare_WORD2 := W#16#0;
+   Screen_Number_Read := W#16#0;
+   Screen_Number_Cmd := W#16#0;
+   Spare_WORD3 := W#16#0;
+   Glue_Fill_Pump_ON := FALSE;
+   Rotaliner_Enabled := FALSE;
+   Bottomer_ON := FALSE;
+   Bottomer_Over_50 := FALSE;
+   Glue_Select_OK := FALSE;
+   Hot_Water_ON := FALSE;
+   Spare1 := FALSE;
+   Spare2 := FALSE;
+   Screen_Cmd_Trigger := FALSE;
+   Glue_Fill_Pump_Test := FALSE;
+   Spare_Bool_122 := FALSE;
+   Spare_Bool_123 := FALSE;
+   Spare_Bool_124 := FALSE;
+   Spare_Bool_125 := FALSE;
+   Spare_Bool_126 := FALSE;
+   Spare_Bool_127 := FALSE;
+   Spare_Bool_128 := FALSE;
 END_DATA_BLOCK
-

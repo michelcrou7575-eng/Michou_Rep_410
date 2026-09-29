@@ -127,7 +127,73 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms FC155
 //     nothing defines how a manual test request should interact with
 //     Valve_Open's automatic decision (override it? gate it? run
 //     independently?) - left alone rather than guessed.
-VERSION : 0.17
+//
+// v0.18 changes vs v0.17 - reconciled against Michou's own online
+//   rebuild (uploaded as root-level "FC155"/"DB10", 2026-09-29). That
+//   rebuild was built directly from v0.15 - it never saw v0.16/v0.17 -
+//   and independently added real logic v0.16/v0.17 didn't have. Neither
+//   side is simply overwritten; both are merged:
+//   - Kept from the online rebuild: AlarmLimit_Overfill_SP/
+//     AlarmLimit_Underfill_SP naming (DB105 v0.8, supersedes v0.16's
+//     Overfill_Weight_SP/Underfill_Weight_SP guess), the
+//     GrossWeight_Actual_Mem snapshot + Actual_Transfered_Weight
+//     calculation (confirmed by Michou: captured "from the actual PUMP
+//     Start"), the "RUN_DATA_DB".Web_Velocity_Filtered -> Bottomer_Velocity
+//     mirror, and the Glue_Fill_Pump_Test -> indicator lamps network.
+//   - Valve_Open -> Pump_ON, Valve_Open_Prev -> Pump_ON_Prev throughout
+//     (DB105 v0.8) - per Michou's call: this has never driven a valve,
+//     it drives a pump, and the old name was actively confusing.
+//   - Fixed: the online rebuild's "Detect scale fault" network read
+//     NegativeUnderScore_Value via a raw `L DB105.DBD 10` instead of the
+//     symbolic name - restored to symbolic. A raw address like that
+//     breaks silently the next time this struct is reordered - the
+//     exact class of bug this project has hit repeatedly elsewhere
+//     (DB30, DB889) - and there is no correctness reason to prefer it
+//     over the symbolic form.
+//   - Completed the pump-output wiring the online rebuild left half
+//     done: it wired Glue_Fill_Pump_Test straight to
+//     "HMI DB".Glue_Fill_Pump_ON but never connected Pump_ON (the
+//     automatic decision) to any real output at all - same gap v0.17
+//     found, just not yet fixed when the online rebuild branched off.
+//     NEW network "Drive physical glue pump output", placed after
+//     "Reset latched alarms" (i.e. unconditional, not gated by
+//     ParseError/Alarm_ScaleFault - confirmed with Michou: "Test
+//     overrides", meaning manual test must still work during a fault,
+//     not just when the scale is healthy): output := Pump_ON OR
+//     Glue_Fill_Pump_Test. Since Glue_Fill_Pump_Test only ever forces
+//     the output on (there's no "force off" case), a plain OR already
+//     implements "override" correctly - Test=1 forces output=1
+//     regardless of Pump_ON; Test=0 lets Pump_ON's own state through
+//     unchanged.
+//   - The former "HMI Button - UpDate" network's `= Glue_Fill_Pump_ON`
+//     coil moves into the new combined network above. Its lamp coils
+//     (GRN_LED/RED_LED/WHT_SWL_1/2/3) are dropped entirely, not kept in
+//     place - v0.19's new "Alarm lamps" and "White lamps" networks (see
+//     below) fully determine all five of those same outputs later in
+//     the same scan, so the early copies were always going to be
+//     overwritten before the scan ended; keeping both was dead code.
+//
+// v0.19 changes vs v0.18 - alarm interlock + lamp outputs, per Michou's
+//   spec (2026-09-29, see DB105 v0.9):
+//   - Overfill/Underfill now interlock Pump_ON: either latched forces
+//     the pump off and keeps it off until Reset_Alarms clears it - see
+//     new "Overfill/Underfill interlock" network, placed right after
+//     the Underfill alarm network (still inside the ParseError/
+//     Alarm_ScaleFault gate, evaluated only on a valid-weight scan).
+//   - NEW "Lamp scan clock" + "Lamp scan step" networks generate a
+//     1->2->3->1 index while Pump_ON is true, using a standard SD-timer
+//     flasher idiom (see that network's own comment for the full
+//     trace-through) - not bench-verified, confirm the 500ms period and
+//     basic on/off behavior on real hardware before trusting it.
+//   - NEW "White lamps" network decodes that index onto
+//     WHT_SWL_1/2/3, with Glue_Fill_Pump_Test forcing all three on
+//     regardless (same override precedent as the pump output above).
+//   - NEW "Alarm lamps" network: RED_LED = Alarm_Overfill OR
+//     Alarm_Underfill OR Alarm_ScaleFault, GRN_LED = NOT that. Michou's
+//     spec only named Overfill/Underfill for RED_LED and "no alarm" for
+//     GRN_LED - ScaleFault was folded into both here so GRN's "no
+//     alarm" claim stays true; flag if that's wrong.
+VERSION : 0.19
 
 
 VAR_TEMP
@@ -142,7 +208,7 @@ BEGIN
 NETWORK
 TITLE =Sync HMI setpoints -> scale setpoints (unconditional, every scan)
 // Only these fields correspond between "HMI DB" and DB105 - see v0.15/
-// v0.16 changelogs for why the other same-offset fields must NOT be
+// v0.18 changelogs for why the other same-offset fields must NOT be
 // copied this way.
       L     "HMI DB".Fill_Start_Weight_SP;
       T     "GLUE SCALE CONTROL DB".Fill_Start_SP;
@@ -150,11 +216,29 @@ TITLE =Sync HMI setpoints -> scale setpoints (unconditional, every scan)
       L     "HMI DB".Fill_Stop_Weight_SP;
       T     "GLUE SCALE CONTROL DB".Fill_Stop_SP;
 
-      L     "HMI DB".Overfill_Weight_SP;
-      T     "GLUE SCALE CONTROL DB".AlarmLimit_Overfill;
+      L     "HMI DB".AlarmLimit_Overfill_SP;
+      T     "GLUE SCALE CONTROL DB".AlarmLimit_Overfill_SP;
 
-      L     "HMI DB".Underfill_Weight_SP;
-      T     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill;
+      L     "HMI DB".AlarmLimit_Underfill_SP;
+      T     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill_SP;
+
+NETWORK
+TITLE =Compute transfered weight and mirror bottomer velocity to HMI DB (unconditional, every scan)
+// Actual_Transfered_Weight = current weight minus the weight snapshot
+// taken at the last pump-start (GrossWeight_Actual_Mem) - see the
+// "Pump control" network below for where that snapshot is taken.
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual_Mem;
+      -I    ;
+      T     "HMI DB".Actual_Transfered_Weight;
+
+// Bottomer_Velocity mirrors the 410 seam-AGC subsystem's own filtered
+// web velocity (DB640/"RUN_DATA_DB", owned by FC120/FB610) - this
+// glue-scale block and the seam monitor share the same physical tube
+// travelling through the line, so the same velocity applies to both.
+      L     "RUN_DATA_DB".Web_Velocity_Filtered;
+      RND   ;
+      T     "HMI DB".Bottomer_Velocity;
 
 NETWORK
 TITLE =Read 16-byte consistent block (IB272-287) via DPRD_DAT
@@ -280,80 +364,202 @@ TITLE =Skip valve/alarm update if parse failed or scale fault latched t
       JC    SKIP; 
 
 NETWORK
-TITLE =Valve control - open below Fill_Start_SP, close at/above Fill_St
+TITLE =Pump control - turns on below Fill_Start_SP, off at/above Fill_Stop_SP (was Valve_Open - drives a pump, not a valve)
 
-      A     "GLUE SCALE CONTROL DB".Valve_Open; 
-      JC    CHKC; 
+      A     "GLUE SCALE CONTROL DB".Pump_ON;
+      JC    CHKC;
 
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
       L     "GLUE SCALE CONTROL DB".Fill_Start_SP;
       <I    ;
       JC    OPEN;
-      JU    VEND;
+      JU    NXT1;
 
 CHKC: L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
       L     "GLUE SCALE CONTROL DB".Fill_Stop_SP;
       >=I   ;
       JC    CLOS;
-      JU    VEND; 
+      JU    NXT1;
 
-OPEN: SET   ; 
-      S     "GLUE SCALE CONTROL DB".Valve_Open; 
-      JU    VEND; 
+OPEN: FP    "FP 200.6"; // edge memory - fires once, the scan Pump_ON is newly commanded on
+      JCN   TRXF;
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; // snapshot weight at pump-start for Actual_Transfered_Weight
+      T     "GLUE SCALE CONTROL DB".GrossWeight_Actual_Mem;
+
+TRXF: SET   ;
+      S     "GLUE SCALE CONTROL DB".Pump_ON;
+      JU    NXT1;
 
 CLOS: SET   ;
-      R     "GLUE SCALE CONTROL DB".Valve_Open;
+      R     "GLUE SCALE CONTROL DB".Pump_ON;
 
-VEND: NOP   0;
-
-NETWORK
-TITLE =Drive physical glue pump output - mirrors Valve_Open onto the real actuator bit
-
-      A     "GLUE SCALE CONTROL DB".Valve_Open;
-      =     "HMI DB".Glue_Fill_Pump_ON;
+NXT1: NOP   0;
 
 NETWORK
 TITLE =Overfill alarm - latching, set on exceed, no auto-reset here
 
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
-      L     "GLUE SCALE CONTROL DB".AlarmLimit_Overfill;
+      L     "GLUE SCALE CONTROL DB".AlarmLimit_Overfill_SP;
       >I    ;
       S     "GLUE SCALE CONTROL DB".Alarm_Overfill;
 
 NETWORK
-TITLE =Underfill check - start 5s settle timer on valve close (falling 
+TITLE =Underfill check - start 5s settle timer on pump-off (falling edge)
 
-      A     "GLUE SCALE CONTROL DB".Valve_Open_Prev; 
-      AN    "GLUE SCALE CONTROL DB".Valve_Open; 
-      L     S5T#5S; 
-      SD    T     50; 
+      A     "GLUE SCALE CONTROL DB".Pump_ON_Prev;
+      AN    "GLUE SCALE CONTROL DB".Pump_ON;
+      L     S5T#5S;
+      SD    T     50;
 
-      A     "GLUE SCALE CONTROL DB".Valve_Open; 
-      =     "GLUE SCALE CONTROL DB".Valve_Open_Prev; 
+      A     "GLUE SCALE CONTROL DB".Pump_ON;
+      =     "GLUE SCALE CONTROL DB".Pump_ON_Prev;
 
 NETWORK
 TITLE =Underfill alarm - latch if weight still below limit when timer e
 
-      A     T     50; 
-      JCN   SKPU; 
+      A     T     50;
+      JCN   SKPU;
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
-      L     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill;
+      L     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill_SP;
       <I    ;
       S     "GLUE SCALE CONTROL DB".Alarm_Underfill;
-SKPU: NOP   0; 
+SKPU: NOP   0;
+
+NETWORK
+TITLE =Overfill/Underfill interlock - blocks the pump while either is latched
+// Overfill: an immediate safety stop if weight somehow exceeds the max
+// even though Fill_Stop_SP should already have closed the pump.
+// Underfill only ever latches after the pump has already stopped (see
+// the settle-timer network above), so "controls the pump" here means
+// blocking automatic re-engagement, not an immediate stop - both read
+// the same way: force Pump_ON off and keep it off while either alarm
+// is latched, until Reset_Alarms clears it.
+      A     "GLUE SCALE CONTROL DB".Alarm_Overfill;
+      O     "GLUE SCALE CONTROL DB".Alarm_Underfill;
+      R     "GLUE SCALE CONTROL DB".Pump_ON;
 
 NETWORK
 TITLE =Exit point for parse-error skip
 
-SKIP: NOP   0; 
+SKIP: NOP   0;
 
 NETWORK
 TITLE =Reset latched alarms - HMI-driven, runs regardless of this scan'
 
-      A     "GLUE SCALE CONTROL DB".Reset_Alarms; 
-      R     "GLUE SCALE CONTROL DB".Alarm_Overfill; 
-      R     "GLUE SCALE CONTROL DB".Alarm_Underfill; 
-      R     "GLUE SCALE CONTROL DB".Alarm_ScaleFault; 
+      A     "GLUE SCALE CONTROL DB".Reset_Alarms;
+      R     "GLUE SCALE CONTROL DB".Alarm_Overfill;
+      R     "GLUE SCALE CONTROL DB".Alarm_Underfill;
+      R     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
+
+NETWORK
+TITLE =Drive physical glue pump output - automatic Pump_ON, Glue_Fill_Pump_Test overrides it on
+
+      A     "GLUE SCALE CONTROL DB".Pump_ON;
+      O     "HMI DB".Glue_Fill_Pump_Test;
+      =     "HMI DB".Glue_Fill_Pump_ON;
+
+NETWORK
+TITLE =Lamp scan clock - one-scan pulse every 500ms while Pump_ON (standard SD-timer flasher idiom)
+// LampScanClockMem toggles high for exactly one scan every 500ms as
+// long as Pump_ON stays true: SD T51 only (re)starts on a rising edge
+// of its own enable rung; while LampScanClockMem is FALSE the rung
+// stays enabled and the stored timer counts down untouched by repeat
+// calls, then on elapse T51.Q goes TRUE, LampScanClockMem latches TRUE
+// for that one scan and T51 is immediately reset - which drops the
+// rung's enable condition back false next scan, clearing
+// LampScanClockMem and re-arming the rising edge for the next 500ms
+// cycle. Not bench-verified - confirm the timing on real hardware.
+      A     "GLUE SCALE CONTROL DB".Pump_ON;
+      AN    "GLUE SCALE CONTROL DB".LampScanClockMem;
+      L     S5T#500MS;
+      SD    T     51;
+
+      A     T     51;
+      =     "GLUE SCALE CONTROL DB".LampScanClockMem;
+      R     T     51;
+
+NETWORK
+TITLE =Lamp scan step - advances 1->2->3->1 on each clock pulse, resets to 1 when the pump stops
+
+      A     "GLUE SCALE CONTROL DB".Pump_ON;
+      JCN   LSRS;
+
+      A     "GLUE SCALE CONTROL DB".LampScanClockMem;
+      JCN   LSDN;
+
+      L     "GLUE SCALE CONTROL DB".LampScanStep;
+      L     3;
+      >=I   ;
+      JCN   LSIN;
+      L     1;
+      T     "GLUE SCALE CONTROL DB".LampScanStep;
+      JU    LSDN;
+
+LSIN: L     "GLUE SCALE CONTROL DB".LampScanStep;
+      L     1;
+      +I    ;
+      T     "GLUE SCALE CONTROL DB".LampScanStep;
+      JU    LSDN;
+
+LSRS: L     1;
+      T     "GLUE SCALE CONTROL DB".LampScanStep;
+      R     T     51;
+      CLR   ;
+      =     "GLUE SCALE CONTROL DB".LampScanClockMem;
+
+LSDN: NOP   0;
+
+NETWORK
+TITLE =White lamps - Glue_Fill_Pump_Test forces all three on, else scan while Pump_ON, else off
+
+      A     "HMI DB".Glue_Fill_Pump_Test;
+      JC    WTON;
+
+      A     "GLUE SCALE CONTROL DB".Pump_ON;
+      JC    WSCN;
+
+      CLR   ;
+      =     "OUTPUTS DB".WHT_SWL_1;
+      =     "OUTPUTS DB".WHT_SWL_2;
+      =     "OUTPUTS DB".WHT_SWL_3;
+      JU    WLDN;
+
+WTON: SET   ;
+      =     "OUTPUTS DB".WHT_SWL_1;
+      =     "OUTPUTS DB".WHT_SWL_2;
+      =     "OUTPUTS DB".WHT_SWL_3;
+      JU    WLDN;
+
+WSCN: L     "GLUE SCALE CONTROL DB".LampScanStep;
+      L     1;
+      ==I   ;
+      =     "OUTPUTS DB".WHT_SWL_1;
+
+      L     "GLUE SCALE CONTROL DB".LampScanStep;
+      L     2;
+      ==I   ;
+      =     "OUTPUTS DB".WHT_SWL_2;
+
+      L     "GLUE SCALE CONTROL DB".LampScanStep;
+      L     3;
+      ==I   ;
+      =     "OUTPUTS DB".WHT_SWL_3;
+
+WLDN: NOP   0;
+
+NETWORK
+TITLE =Alarm lamps - RED_LED if any alarm latched, GRN_LED if none
+// Extends beyond just Overfill/Underfill to include Alarm_ScaleFault
+// too - GRN meaning "no alarm" wouldn't be accurate if a scale fault
+// could be active while GRN still lit. Flag if ScaleFault should not
+// be included here.
+      A     "GLUE SCALE CONTROL DB".Alarm_Overfill;
+      O     "GLUE SCALE CONTROL DB".Alarm_Underfill;
+      O     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
+      =     "OUTPUTS DB".RED_LED;
+
+      NOT   ;
+      =     "OUTPUTS DB".GRN_LED;
 
 END_FUNCTION
 

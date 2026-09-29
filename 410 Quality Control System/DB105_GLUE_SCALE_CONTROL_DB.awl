@@ -89,47 +89,92 @@ TITLE =Glue Scale Weight Control and Alarms
 //   column, not assumed. Not wired to anything - same
 //   unused/reserved status as the original SpareReal, no confirmed
 //   intended behavior for any of the four.
-VERSION : 0.7
+//
+// v0.8 changes vs v0.7 - synced against Michou's own online rebuild of
+//   FC155 (uploaded as root-level "FC155"/"DB10", 2026-09-29), which was
+//   built directly from v0.15 (missing this repo's v0.16/v0.17 work) and
+//   diverged independently - reconciled here rather than overwritten:
+//   - AlarmLimit_Overfill -> AlarmLimit_Overfill_SP, AlarmLimit_Underfill
+//     -> AlarmLimit_Underfill_SP: renamed to match the setpoint naming
+//     Michou used on the matching "HMI DB" fields.
+//   - NEW GrossWeight_Actual_Mem : INT - snapshot of GrossWeight_Actual
+//     taken once, on the scan the pump is newly commanded on (edge-
+//     detected via a memory-bit FP in FC155's pump-control network).
+//     FC155 subtracts this from the live GrossWeight_Actual to compute
+//     "HMI DB".Actual_Transfered_Weight - confirmed by Michou: "from the
+//     actual PUMP Start".
+//   - Valve_Open -> Pump_ON, Valve_Open_Prev -> Pump_ON_Prev: per
+//     Michou's call - this output has never driven a valve, it drives
+//     "HMI DB".Glue_Fill_Pump_ON (a pump), and the old name was actively
+//     confusing given that.
+//   - NegativeUnderScore_Value's live compiled offset was DBD10 in
+//     Michou's upload but FC155 there read it via the raw address
+//     `L DB105.DBD 10` instead of the symbolic name - fixed back to
+//     symbolic in FC155 v0.18 (see that block's changelog) - flagged
+//     here since a raw address like that silently breaks the instant
+//     this struct is reordered, exactly the class of bug this project
+//     has hit repeatedly elsewhere (DB30, DB889).
+//
+// v0.9 changes vs v0.8 - alarm interlock and lamp outputs, per Michou's
+//   spec (2026-09-29):
+//   - NEW LampScanClockMem : BOOL, LampScanStep : INT - support state
+//     for FC155's white-lamp "scan" pattern (WHT_SWL_1/2/3 cycling
+//     1-2-3-1... while the pump runs). LampScanClockMem is a one-scan
+//     500ms flasher pulse (T51 - confirm this timer isn't used
+//     elsewhere in the 410 project, same caution as T50); LampScanStep
+//     is the current lamp index (1/2/3), reset to 1 when the pump
+//     stops. See FC155 v0.19 for the full pattern - not bench-verified.
+//   - Overfill/Underfill now interlock Pump_ON directly (FC155 v0.19):
+//     either latched forces the pump off and keeps it off until
+//     Reset_Alarms clears it. Previously they only set their own alarm
+//     bits with no effect on pump operation.
+VERSION : 0.9
 
   STRUCT
    GrossWeight_Actual : INT ;	//Parsed live weight from KWS CY300 scale (kg) - whole kg, scale's decimal digit is discarded (see FC155)
-   Fill_Start_SP : INT ;	//Operator-entered fill-start weight (kg) - valve opens below this - HMI writable
-   Fill_Stop_SP : INT ;	//Operator-entered fill-stop weight (kg) - valve closes at/above this - HMI writable
-   AlarmLimit_Overfill : INT ;	//Operator-entered max allowed weight (kg) - HMI writable
-   AlarmLimit_Underfill : INT ;	//Operator-entered min allowed weight (kg) - HMI writable
+   GrossWeight_Actual_Mem : INT ;	//Snapshot of GrossWeight_Actual taken on the scan the pump is newly commanded on - see FC155 pump-control network
+   Fill_Start_SP : INT ;	//Operator-entered fill-start weight (kg) - pump turns on below this - HMI writable
+   Fill_Stop_SP : INT ;	//Operator-entered fill-stop weight (kg) - pump turns off at/above this - HMI writable
+   AlarmLimit_Overfill_SP : INT ;	//Operator-entered max allowed weight (kg) - HMI writable - latching, interlocks Pump_ON off
+   AlarmLimit_Underfill_SP : INT ;	//Operator-entered min allowed weight (kg) - HMI writable - latching, interlocks Pump_ON off
    NegativeUnderScore_Value : DINT ;	//Fixed sentinel value the KWS CY300 sends when its reading is negative (scale fault) - DINT, not INT: 5222222 doesn't fit in 16 bits - see FC155
-   Hysteresis : INT ;	//Reserved - no longer read by FC155's valve network (see v0.3 changelog); kept for struct-layout compatibility
+   Hysteresis : INT ;	//Reserved - no longer read by FC155's pump-control network (see v0.3 changelog); kept for struct-layout compatibility
+   LampScanStep : INT ;	//NEW v0.9 - current white-lamp scan index (1/2/3) while the pump runs - see FC155
    SpareReal : REAL ;
    SpareReal1 : REAL ;	//NEW v0.7 - appeared online, not yet wired to anything
    SpareReal2 : REAL ;	//NEW v0.7 - appeared online, not yet wired to anything
    SpareReal3 : REAL ;	//NEW v0.7 - appeared online, not yet wired to anything
-   Valve_Open : BOOL ;	//Output: TRUE = valve open, filling in progress
-   Alarm_Overfill : BOOL ;	//Output: TRUE = weight exceeded overfill limit (latching)
-   Alarm_Underfill : BOOL ;	//Output: TRUE = weight below underfill limit at settle check (latching)
+   Pump_ON : BOOL ;	//Output: TRUE = glue fill pump commanded on, filling in progress - mirrored onto "HMI DB".Glue_Fill_Pump_ON by FC155 (was Valve_Open)
+   Alarm_Overfill : BOOL ;	//Output: TRUE = weight exceeded overfill limit (latching) - interlocks Pump_ON off, drives RED_LED
+   Alarm_Underfill : BOOL ;	//Output: TRUE = weight below underfill limit at settle check (latching) - interlocks Pump_ON off, drives RED_LED
    ParseError : BOOL ;	//Output: TRUE = ASCII parse failed this scan (bad/garbled scale data)
-   Valve_Open_Prev : BOOL ;	//Internal: previous scan Valve_Open state, for edge detection
+   Pump_ON_Prev : BOOL ;	//Internal: previous scan Pump_ON state, for edge detection (was Valve_Open_Prev)
    Scale_Powered_On : BOOL ;	//Live Data Coming In - not yet wired by FC155
-   Alarm_ScaleFault : BOOL ;	//Output: TRUE = the scale's raw parsed integer matched NegativeUnderScore_Value this scan - scale reporting a negative/fault reading (latching)
+   Alarm_ScaleFault : BOOL ;	//Output: TRUE = the scale's raw parsed integer matched NegativeUnderScore_Value this scan - scale reporting a negative/fault reading (latching) - drives RED_LED
    Reset_Alarms : BOOL ;	//Input: HMI-driven, hold/pulse TRUE to clear Alarm_Overfill, Alarm_Underfill and Alarm_ScaleFault
+   LampScanClockMem : BOOL ;	//NEW v0.9 - internal, one-scan-wide 500ms flasher pulse driving LampScanStep - see FC155
   END_STRUCT ;
 BEGIN
    GrossWeight_Actual := 0;
+   GrossWeight_Actual_Mem := 0;
    Fill_Start_SP := 50;
    Fill_Stop_SP := 70;
-   AlarmLimit_Overfill := 80;
-   AlarmLimit_Underfill := 20;
+   AlarmLimit_Overfill_SP := 80;
+   AlarmLimit_Underfill_SP := 20;
    NegativeUnderScore_Value := L#5222222;
    Hysteresis := 2;
+   LampScanStep := 1;
    SpareReal := 0.0;
    SpareReal1 := 0.0;
    SpareReal2 := 0.0;
    SpareReal3 := 0.0;
-   Valve_Open := FALSE;
+   Pump_ON := FALSE;
    Alarm_Overfill := FALSE;
    Alarm_Underfill := FALSE;
    ParseError := FALSE;
-   Valve_Open_Prev := FALSE;
+   Pump_ON_Prev := FALSE;
    Scale_Powered_On := FALSE;
    Alarm_ScaleFault := FALSE;
    Reset_Alarms := FALSE;
+   LampScanClockMem := FALSE;
 END_DATA_BLOCK

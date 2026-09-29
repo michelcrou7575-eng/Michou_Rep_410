@@ -1,10 +1,10 @@
-# Glue Scale Weight Monitor / Valve Control — 410 Line
+# Glue Scale Weight Monitor / Pump Control — 410 Line
 
 Reads a KILO TECK KWS CY300 glue-transfer scale via serial ASCII, brings it
 into the S7-315-2 DP PLC through an Anybus Communicator (PROFIBUS gateway),
 parses the ASCII weight into an INT (whole kg — the scale's decimal digit is
-discarded, fractional precision isn't needed), and drives a fill valve with
-hysteresis plus latching over/underfill alarms.
+discarded, fractional precision isn't needed), and drives a glue fill pump
+with a start/stop weight band plus latching over/underfill alarms.
 
 ## Hardware / signal chain
 
@@ -41,24 +41,23 @@ Anybus Communicator --PROFIBUS DP (node addr 4)--> Siemens S7-315-2 DP CPU
 
 FC155 parses Byte_0-6 into `"GLUE SCALE CONTROL DB".GrossWeight_Actual : INT`
 (whole kg). Byte_8 is no longer converted into a fractional part — the scale
-transaction doesn't need sub-kg precision, and every live setpoint was
-already a whole number. Byte_7/9/10 are checked against their fixed values
-each scan; any mismatch (or a non-zero SFC14 RET_VAL) sets `ParseError` and
-holds the last-good weight/valve/alarm state rather than acting on a bad
-telegram.
+transaction doesn't need sub-kg precision. Byte_7/9/10 are checked against
+their fixed values each scan; any mismatch (or a non-zero SFC14 RET_VAL) sets
+`ParseError` and holds the last-good weight/pump/alarm state rather than
+acting on a bad telegram.
 
 ## Control logic ("GLUE SCALE CONTROL DB" / DB105)
 
-- **Valve_Open**: two explicit thresholds, no separate hysteresis
-  subtraction. Opens when `GrossWeight_Actual < Fill_Start_SP`; closes at
+- **Pump_ON** (was `Valve_Open` — renamed, since it's always driven a pump,
+  never a valve): turns on when `GrossWeight_Actual < Fill_Start_SP`, off at
   `GrossWeight_Actual >= Fill_Stop_SP`. (`Hysteresis` is still declared in
-  DB105 for struct-layout compatibility but is no longer read here.)
-  Mirrored onto the real actuator bit, `"HMI DB".Glue_Fill_Pump_ON` — see
-  HMI bridge section below; before this, Valve_Open drove no physical
-  output at all.
-- **Alarm_Overfill**: latching, sets if `GrossWeight_Actual > AlarmLimit_Overfill`.
-- **Alarm_Underfill**: 5 seconds after Valve_Open falls (timer T50), checks
-  `GrossWeight_Actual < AlarmLimit_Underfill` once at that instant; latching.
+  DB105 for struct-layout compatibility but is no longer read.) On the rising
+  edge of turning on, snapshots the current weight into
+  `GrossWeight_Actual_Mem` — see "Transfered weight" below. Mirrored onto the
+  real actuator bit, `"HMI DB".Glue_Fill_Pump_ON` — see HMI bridge section.
+- **Alarm_Overfill**: latching, sets if `GrossWeight_Actual > AlarmLimit_Overfill_SP`.
+- **Alarm_Underfill**: 5 seconds after Pump_ON falls (timer T50), checks
+  `GrossWeight_Actual < AlarmLimit_Underfill_SP` once at that instant; latching.
 - **Alarm_ScaleFault**: latching, sets if the raw parsed integer matches
   `NegativeUnderScore_Value` (DINT, 5222222) — the KWS CY300's fixed
   sentinel telegram (all 7 digits of the integer-part field, no leading
@@ -66,8 +65,11 @@ telegram.
   negative. The comparison runs on the wide parse temp *before* it's
   truncated into the INT `GrossWeight_Actual` — 5222222 doesn't fit in
   16-bit INT range, so comparing the already-truncated value would never
-  match. Also gates valve/alarm updates the same way ParseError does, so
-  the valve doesn't react to the sentinel as if it were a weight.
+  match. Also gates pump/alarm updates the same way ParseError does, so
+  the pump doesn't react to the sentinel as if it were a weight.
+- **Overfill/Underfill interlock**: while `Alarm_Overfill` OR
+  `Alarm_Underfill` is latched, `Pump_ON` is forced off and held off (blocks
+  automatic re-engagement) until `Reset_Alarms` clears the alarm.
 - **Reset_Alarms**: HMI-driven input bit. While TRUE, clears
   `Alarm_Overfill`, `Alarm_Underfill` and `Alarm_ScaleFault` together
   every scan (level-conditioned, not edge — safe as a momentary
@@ -77,84 +79,107 @@ telegram.
   of the block, so a latched fault can always be cleared. The PLC side
   is wired; connecting an actual HMI button to this bit is still open.
 
+## Transfered weight
+
+`"HMI DB".Actual_Transfered_Weight` = `GrossWeight_Actual` −
+`GrossWeight_Actual_Mem`, recomputed every scan. `GrossWeight_Actual_Mem` is
+a snapshot of the weight taken once, on the scan `Pump_ON` is newly
+commanded on — i.e. this tracks how much has been transferred since the
+pump last started, confirmed against the real pump-start event, not a
+free-running or reset-driven total.
+
+## Manual test and indicator lamps (all in "OUTPUTS DB", shared with other
+## subsystems — not tracked in this repo)
+
+- **Glue_Fill_Pump_Test** (`"HMI DB"`, manual HMI bit): overrides
+  `Glue_Fill_Pump_ON` on regardless of `Pump_ON`'s automatic state — and
+  forces `WHT_SWL_1`/`WHT_SWL_2`/`WHT_SWL_3` all on together, in place of
+  the scan pattern below. Since Test only ever forces the output on (never
+  off), this is implemented as a plain OR against the automatic decision,
+  not a conditional branch — same result, less code. Runs unconditionally
+  (not gated by ParseError/Alarm_ScaleFault), so manual test still works
+  during a scale fault.
+- **WHT_SWL_1/2/3 scan pattern**: while `Pump_ON` is true (and Test is not
+  active), these three lamps cycle 1→2→3→1… as a running-light "pump active"
+  indicator. Driven by a 500ms one-scan-pulse flasher (`LampScanClockMem`,
+  timer T51 — confirm unused elsewhere in the 410 project, same caution
+  already flagged for T50) advancing `LampScanStep` (1/2/3, resets to 1 when
+  the pump stops). **Not bench-verified** — the flasher is a standard S7 STL
+  idiom, traced through by hand, but hasn't been confirmed on real hardware.
+- **RED_LED**: on if `Alarm_Overfill` OR `Alarm_Underfill` OR
+  `Alarm_ScaleFault` is latched. **GRN_LED**: on if none are. (Michou's spec
+  named only Overfill/Underfill for RED and "no alarm" for GRN —
+  `Alarm_ScaleFault` was folded into both here so GRN's "no alarm" claim
+  stays accurate; flag if ScaleFault shouldn't be included.)
+
 ## HMI bridge ("HMI DB" / DB10)
 
-FC155 mirrors six fields to/from `"HMI DB"` (DB10) every scan:
+FC155 mirrors these fields to/from `"HMI DB"` (DB10) every scan,
+unconditionally (not gated by ParseError/Alarm_ScaleFault) unless noted:
 
-- `"HMI DB".Fill_Start_Weight_SP` → `Fill_Start_SP`,
-  `"HMI DB".Fill_Stop_Weight_SP` → `Fill_Stop_SP`,
-  `"HMI DB".Overfill_Weight_SP` → `AlarmLimit_Overfill`, and
-  `"HMI DB".Underfill_Weight_SP` → `AlarmLimit_Underfill` — all four
-  operator-entered setpoints flow HMI → scale, one-way, unconditionally
-  (not gated by ParseError/Alarm_ScaleFault — the touch panel's own
-  numeric-entry widget is the display of record for what was last
-  typed, so nothing needs to be mirrored back for these).
-- `GrossWeight_Actual` → `"HMI DB".Actual_Glue_Weight` — the live reading
-  flows scale → HMI, for display, unconditionally.
-- `Valve_Open` → `"HMI DB".Glue_Fill_Pump_ON` — the actual pump output.
-  Runs inside the same ParseError/Alarm_ScaleFault-gated region as
-  `Valve_Open` itself, so it only updates on scans where the valve
-  logic itself ran; during a fault it simply isn't re-evaluated, same
-  "hold last state" behavior as the rest of the gated block. Found by
-  checking what, if anything, drove a real output from `Valve_Open` -
-  nothing did, anywhere in this project, until this was wired.
-  `"HMI DB".Glue_Fill_Pump_Test` is a separate manual bit that still
-  isn't wired to anything - see "Still open".
+- `Fill_Start_Weight_SP` → `Fill_Start_SP`, `Fill_Stop_Weight_SP` →
+  `Fill_Stop_SP`, `AlarmLimit_Overfill_SP` → `AlarmLimit_Overfill_SP`,
+  `AlarmLimit_Underfill_SP` → `AlarmLimit_Underfill_SP` — operator-entered
+  setpoints flow HMI → scale, one-way (the touch panel's own numeric-entry
+  widget is the display of record for what was last typed).
+- `GrossWeight_Actual` → `Actual_Glue_Weight` — live reading, scale → HMI.
+- `GrossWeight_Actual − GrossWeight_Actual_Mem` → `Actual_Transfered_Weight`
+  — see "Transfered weight" above.
+- `"RUN_DATA_DB".Web_Velocity_Filtered` (410 seam-AGC subsystem, DB640,
+  owned by FC120/FB610) → `Bottomer_Velocity` — this glue-scale block and
+  the seam monitor share the same physical tube, so the same web velocity
+  applies to both; not this block's own measurement.
+- `Pump_ON` OR `Glue_Fill_Pump_Test` → `Glue_Fill_Pump_ON` — the real pump
+  output. Runs unconditionally (see "Manual test and indicator lamps"
+  above) — found by checking what, if anything, drove a real output from
+  the pump decision: nothing did, anywhere in this project, until this was
+  wired.
 
-The `Overfill_Weight_SP`/`Underfill_Weight_SP` pair didn't originally
-exist in DB10 — added (HMI DB v0.2) by repurposing two of its three
-`Spare_INT` slots, after the physical "Glue InFeed Manager" touch panel
-turned out to already have "Over Filled Weight"/"Under Filled Weight"
-setpoint fields on screen with nothing backing them.
-
-`"HMI DB"` and DB105 both happen to have 5 consecutive INT fields at
-offsets 0/2/4/6/8, but `"HMI DB".Actual_Transfered_Weight`/
-`Bottomer_Velocity` (6.0/8.0) and DB105's `AlarmLimit_Overfill`/
-`AlarmLimit_Underfill` (also 6.0/8.0) are unrelated fields that only
-share a byte offset by coincidence — `Overfill_Weight_SP`/
-`Underfill_Weight_SP` (the fields that actually correspond to
-`AlarmLimit_Overfill`/`AlarmLimit_Underfill`) live at 14.0/16.0 in
-DB10, not 6.0/8.0. The sync is wired by symbol name, one field at a
-time — never as a block copy across a matching address range.
+`"HMI DB"` was restructured directly online (HMI DB v0.3): `Data_Write`/
+`Data_Read` (WORD, confirmed unused anywhere) were removed, the three
+separate `Spare_INT_121/122/123` collapsed to one `Spare_INT`, and bools
+reordered. Since FC155/FC160 reference every field by symbol name (not raw
+offset), this is safe as long as both are recompiled together — already
+true, both were uploaded from the live, working PLC project.
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.17. SFC14 reads,
-  ASCII parse (INT weight, decimal digit discarded), valve control, alarm
-  latching and reset, HMI DB bridge (setpoints, live weight, and the
-  real pump output). Originated as a STEP7 export of the
-  live PLC's actual block — logic was identical to the now-deleted
-  FC104_GLUE_SCALE.awl v0.13 at that point; FC104 was compiled, deployed,
-  then renumbered FC104->FC155 and renamed "GLUE_SCALE" ->
-  "GLUE SCALE LOGIC" on the real PLC project.
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.19. SFC14 reads,
+  ASCII parse (INT weight, decimal digit discarded), pump control with
+  overfill/underfill interlock, alarm latching and reset, HMI DB bridge
+  (setpoints, live weight, transfered-weight calc, bottomer-velocity
+  mirror, the real pump output), and lamp outputs (scan pattern + alarm
+  lamps). Originated as a STEP7 export of the live PLC's actual block —
+  logic was identical to the now-deleted FC104_GLUE_SCALE.awl v0.13 at
+  that point; FC104 was compiled, deployed, then renumbered FC104->FC155
+  and renamed "GLUE_SCALE" -> "GLUE SCALE LOGIC" on the real PLC project.
+  Later independently rebuilt online past v0.15 by Michou (Pump_ON
+  rename, transfered-weight tracking, HMI restructure) in parallel with
+  this repo's own v0.16/v0.17 — both reconciled together at v0.18/v0.19.
 - `DB4_ABC3000A_DB.awl` — 20-byte raw telegram buffer, filled by SFC14.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
-  limits, scale-fault sentinel, valve/alarm output bits, alarm reset.
-  Version 0.7. Symbol is `"GLUE SCALE CONTROL DB"` (spaces) to match what
-  FC155 actually references.
+  limits, scale-fault sentinel, pump/alarm output bits, alarm reset, lamp
+  scan state. Version 0.9. Symbol is `"GLUE SCALE CONTROL DB"` (spaces)
+  to match what FC155 actually references.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.
 - `Anybus Communicator configuration *.conf` — exported gateway config;
   confirms the "GROSS FILTER" transaction/telegram layout is unchanged.
-- `HMI DB 10` — the HMI comms DB (DB10), version 0.2, owned by FC160,
+- `HMI DB 10` — the HMI comms DB (DB10), version 0.3, owned by FC160,
   not this project's source of truth. Referenced here because FC155's
-  HMI bridge (above) reads/writes six of its fields by symbol name.
+  HMI bridge (above) reads/writes several of its fields by symbol name.
 
 ## Still open
 
 - HMI button/screen wiring to pulse `Reset_Alarms` — the PLC-side reset
   logic exists, nothing drives the bit yet.
-- `"HMI DB".Actual_Transfered_Weight` has no source anywhere in this
-  project. No specification exists for what it should count (cumulative
-  since reset? per fill-cycle? fed from something other than this
-  scale entirely?) - needs that answered before anything writes to it.
-- `"HMI DB".Glue_Fill_Pump_Test` — exists in DB10, unused. How a manual
-  test request should interact with `Valve_Open`'s automatic decision
-  (override it, gate it, run independently) isn't specified.
-- Confirm T50 isn't used elsewhere in the 410 project.
+- The lamp-scan flasher (`LampScanClockMem`/`LampScanStep`, T51) is
+  hand-traced but not bench-verified — confirm the 500ms period and
+  on/off behavior on real hardware.
+- Confirm T50 and T51 aren't used elsewhere in the 410 project.
 - `Hysteresis`, `SpareReal`/`SpareReal1`/`SpareReal2`/`SpareReal3`, and
   `Scale_Powered_On` exist in DB105 but aren't wired to anything in FC155
   yet — no confirmed intended behavior for any of them.
-- The touch panel's own screen project needs `Overfill_Weight_SP`/
-  `Underfill_Weight_SP`'s tags pointed at DB10's new offsets (14.0/16.0)
-  — outside this repo, can't be done from here.
+- The touch panel's own screen project needs its tags re-pointed to
+  match `"HMI DB"` v0.3's restructured offsets — outside this repo, can't
+  be done from here.
