@@ -53,6 +53,9 @@ telegram.
   subtraction. Opens when `GrossWeight_Actual < Fill_Start_SP`; closes at
   `GrossWeight_Actual >= Fill_Stop_SP`. (`Hysteresis` is still declared in
   DB105 for struct-layout compatibility but is no longer read here.)
+  Mirrored onto the real actuator bit, `"HMI DB".Glue_Fill_Pump_ON` — see
+  HMI bridge section below; before this, Valve_Open drove no physical
+  output at all.
 - **Alarm_Overfill**: latching, sets if `GrossWeight_Actual > AlarmLimit_Overfill`.
 - **Alarm_Underfill**: 5 seconds after Valve_Open falls (timer T50), checks
   `GrossWeight_Actual < AlarmLimit_Underfill` once at that instant; latching.
@@ -76,18 +79,27 @@ telegram.
 
 ## HMI bridge ("HMI DB" / DB10)
 
-FC155 mirrors five fields to/from `"HMI DB"` (DB10) every scan,
-unconditionally (not gated by ParseError/Alarm_ScaleFault):
+FC155 mirrors six fields to/from `"HMI DB"` (DB10) every scan:
 
 - `"HMI DB".Fill_Start_Weight_SP` → `Fill_Start_SP`,
   `"HMI DB".Fill_Stop_Weight_SP` → `Fill_Stop_SP`,
   `"HMI DB".Overfill_Weight_SP` → `AlarmLimit_Overfill`, and
   `"HMI DB".Underfill_Weight_SP` → `AlarmLimit_Underfill` — all four
-  operator-entered setpoints flow HMI → scale, one-way (the touch
-  panel's own numeric-entry widget is the display of record for what
-  was last typed, so nothing needs to be mirrored back for these).
+  operator-entered setpoints flow HMI → scale, one-way, unconditionally
+  (not gated by ParseError/Alarm_ScaleFault — the touch panel's own
+  numeric-entry widget is the display of record for what was last
+  typed, so nothing needs to be mirrored back for these).
 - `GrossWeight_Actual` → `"HMI DB".Actual_Glue_Weight` — the live reading
-  flows scale → HMI, for display.
+  flows scale → HMI, for display, unconditionally.
+- `Valve_Open` → `"HMI DB".Glue_Fill_Pump_ON` — the actual pump output.
+  Runs inside the same ParseError/Alarm_ScaleFault-gated region as
+  `Valve_Open` itself, so it only updates on scans where the valve
+  logic itself ran; during a fault it simply isn't re-evaluated, same
+  "hold last state" behavior as the rest of the gated block. Found by
+  checking what, if anything, drove a real output from `Valve_Open` -
+  nothing did, anywhere in this project, until this was wired.
+  `"HMI DB".Glue_Fill_Pump_Test` is a separate manual bit that still
+  isn't wired to anything - see "Still open".
 
 The `Overfill_Weight_SP`/`Underfill_Weight_SP` pair didn't originally
 exist in DB10 — added (HMI DB v0.2) by repurposing two of its three
@@ -107,9 +119,10 @@ time — never as a block copy across a matching address range.
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.16. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.17. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), valve control, alarm
-  latching and reset, HMI DB bridge. Originated as a STEP7 export of the
+  latching and reset, HMI DB bridge (setpoints, live weight, and the
+  real pump output). Originated as a STEP7 export of the
   live PLC's actual block — logic was identical to the now-deleted
   FC104_GLUE_SCALE.awl v0.13 at that point; FC104 was compiled, deployed,
   then renumbered FC104->FC155 and renamed "GLUE_SCALE" ->
@@ -125,13 +138,23 @@ time — never as a block copy across a matching address range.
   confirms the "GROSS FILTER" transaction/telegram layout is unchanged.
 - `HMI DB 10` — the HMI comms DB (DB10), version 0.2, owned by FC160,
   not this project's source of truth. Referenced here because FC155's
-  HMI bridge (above) reads/writes five of its fields by symbol name.
+  HMI bridge (above) reads/writes six of its fields by symbol name.
 
 ## Still open
 
 - HMI button/screen wiring to pulse `Reset_Alarms` — the PLC-side reset
   logic exists, nothing drives the bit yet.
+- `"HMI DB".Actual_Transfered_Weight` has no source anywhere in this
+  project. No specification exists for what it should count (cumulative
+  since reset? per fill-cycle? fed from something other than this
+  scale entirely?) - needs that answered before anything writes to it.
+- `"HMI DB".Glue_Fill_Pump_Test` — exists in DB10, unused. How a manual
+  test request should interact with `Valve_Open`'s automatic decision
+  (override it, gate it, run independently) isn't specified.
 - Confirm T50 isn't used elsewhere in the 410 project.
 - `Hysteresis`, `SpareReal`/`SpareReal1`/`SpareReal2`/`SpareReal3`, and
   `Scale_Powered_On` exist in DB105 but aren't wired to anything in FC155
   yet — no confirmed intended behavior for any of them.
+- The touch panel's own screen project needs `Overfill_Weight_SP`/
+  `Underfill_Weight_SP`'s tags pointed at DB10's new offsets (14.0/16.0)
+  — outside this repo, can't be done from here.

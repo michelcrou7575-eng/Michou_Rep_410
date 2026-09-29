@@ -107,7 +107,27 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms FC155
 //     panel's own numeric-entry widget is the display of record for
 //     what was last typed, so no mirror back is needed (matches why
 //     Fill_Start_SP/Fill_Stop_SP were never mirrored back either).
-VERSION : 0.16
+//
+// v0.17 changes vs v0.16 - drive the real pump output:
+//   - Found by cross-referencing "HMI DB" against this block: nothing
+//     anywhere in this project read or wrote "HMI DB".Glue_Fill_Pump_ON
+//     or Valve_Open outside FC155/DB105 themselves - meaning
+//     Valve_Open's entire open/close decision never reached any real
+//     actuator. Glue_Fill_Pump_ON is the obvious candidate (declared in
+//     DB10 with exactly that comment, otherwise unused).
+//   - NEW network "Drive physical glue pump output", placed right after
+//     the "Valve control" network (still inside the ParseError/
+//     Alarm_ScaleFault skip-gated region, same as Valve_Open itself) -
+//     mirrors Valve_Open onto "HMI DB".Glue_Fill_Pump_ON every scan
+//     Valve_Open is actually evaluated. During a fault scan the whole
+//     gated region is skipped, so Valve_Open holds its last value and
+//     this mirror simply isn't re-run - same "hold last state" behavior
+//     as everything else in this block during a fault.
+//   - NOT wired: "HMI DB".Glue_Fill_Pump_Test. It exists in DB10 but
+//     nothing defines how a manual test request should interact with
+//     Valve_Open's automatic decision (override it? gate it? run
+//     independently?) - left alone rather than guessed.
+VERSION : 0.17
 
 
 VAR_TEMP
@@ -281,10 +301,16 @@ OPEN: SET   ;
       S     "GLUE SCALE CONTROL DB".Valve_Open; 
       JU    VEND; 
 
-CLOS: SET   ; 
-      R     "GLUE SCALE CONTROL DB".Valve_Open; 
+CLOS: SET   ;
+      R     "GLUE SCALE CONTROL DB".Valve_Open;
 
-VEND: NOP   0; 
+VEND: NOP   0;
+
+NETWORK
+TITLE =Drive physical glue pump output - mirrors Valve_Open onto the real actuator bit
+
+      A     "GLUE SCALE CONTROL DB".Valve_Open;
+      =     "HMI DB".Glue_Fill_Pump_ON;
 
 NETWORK
 TITLE =Overfill alarm - latching, set on exceed, no auto-reset here
