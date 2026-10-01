@@ -1,0 +1,95 @@
+FUNCTION "SCALE POWER-UP CALIBRATION" : VOID
+TITLE =KWS CY300 power-up calibration sequence (K1 cal relay / K2 power relay) FC156
+// v0.1 - NEW, per Michou's hand-drawn relay wiring (2026-10-01, "SCALE
+//   RELAYS DB"/DB60) and exact sequence (2026-10-01): "1st Calib Relay
+//   K1 ... then Power up: K2 ON 1 sec ... Wait 5sec then K1 Off!" -
+//   works around the KWS CY300 resetting its zero/calibration reference
+//   on every power-up: closing the calibration shunt (K1) BEFORE
+//   power-cycling the scale (K2) means the scale sees the known shunt
+//   reference the moment it boots.
+//
+//   Step sequence (Recal_Step, "SCALE RELAYS DB"):
+//     0 idle - waiting for a Recal_Request rising edge
+//     1 Calibration_Relay_K1 energized, advances immediately
+//     2 PowerSw_Relay_K2 pulsed on for 1s (T52), then released
+//     3 5s settle wait (T53) - scale boots/calibrates against the shunt
+//     4 Calibration_Relay_K1 released, sequence done, Recal_Step -> 0
+//
+//   A new Recal_Request edge is ignored while Recal_Step <> 0 (a
+//   sequence is already running). Timings (1s K2 pulse, 5s wait) are
+//   exactly what Michou specified, not placeholders. T52/T53 confirmed
+//   unused elsewhere in the 410 project (same check already applied to
+//   T50/T51 in FC155).
+//
+//   NOT yet done: nothing calls this FC yet - needs a CALL "SCALE
+//   POWER-UP CALIBRATION" added to OB1 (not tracked in this repo) same
+//   as FC155 presumably already has. Recal_Request isn't wired to an
+//   HMI button yet either - same open gap as DB105.Reset_Alarms.
+VERSION : 0.1
+
+BEGIN
+NETWORK
+TITLE =Power-up calibration sequence - K1 first, then K2 1s pulse, 5s wait, K1 off
+
+      A     "SCALE RELAYS DB".Recal_Request;
+      FP    "SCALE RELAYS DB".Recal_ReqMem;
+      JCN   RC_STP;
+
+      L     "SCALE RELAYS DB".Recal_Step;
+      L     0;
+      <>I   ;
+      JC    RC_STP;
+
+      L     1;
+      T     "SCALE RELAYS DB".Recal_Step;
+
+RC_STP: L     "SCALE RELAYS DB".Recal_Step;
+      L     1;
+      ==I   ;
+      JC    RC_S1;
+      L     "SCALE RELAYS DB".Recal_Step;
+      L     2;
+      ==I   ;
+      JC    RC_S2;
+      L     "SCALE RELAYS DB".Recal_Step;
+      L     3;
+      ==I   ;
+      JC    RC_S3;
+      L     "SCALE RELAYS DB".Recal_Step;
+      L     4;
+      ==I   ;
+      JC    RC_S4;
+      JU    RC_DN;
+
+RC_S1: S     "SCALE RELAYS DB".Calibration_Relay_K1;
+      L     2;
+      T     "SCALE RELAYS DB".Recal_Step;
+      JU    RC_DN;
+
+RC_S2: S     "SCALE RELAYS DB".PowerSw_Relay_K2;
+      L     S5T#1S;
+      SD    T     52;
+      A     T     52;
+      JCN   RC_DN;
+      R     "SCALE RELAYS DB".PowerSw_Relay_K2;
+      R     T     52;
+      L     3;
+      T     "SCALE RELAYS DB".Recal_Step;
+      JU    RC_DN;
+
+RC_S3: L     S5T#5S;
+      SD    T     53;
+      A     T     53;
+      JCN   RC_DN;
+      R     T     53;
+      L     4;
+      T     "SCALE RELAYS DB".Recal_Step;
+      JU    RC_DN;
+
+RC_S4: R     "SCALE RELAYS DB".Calibration_Relay_K1;
+      L     0;
+      T     "SCALE RELAYS DB".Recal_Step;
+
+RC_DN: NOP   0;
+
+END_FUNCTION

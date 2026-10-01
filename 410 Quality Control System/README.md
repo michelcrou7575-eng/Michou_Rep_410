@@ -142,6 +142,35 @@ reordered. Since FC155/FC160 reference every field by symbol name (not raw
 offset), this is safe as long as both are recompiled together — already
 true, both were uploaded from the live, working PLC project.
 
+## Power-up calibration workaround (KWS CY300 defect, FC156 / DB60)
+
+The KWS CY300 resets its zero/calibration reference on every power-up —
+a known hardware defect. Michou's workaround adds two relays, wired per
+his hand-drawn diagram (2026-10-01):
+
+- **K1 "Calibration Relay"** — switches the load-cell S+/S- signal pair
+  through a shunt-cal loop built into the scale. Coil on PLC terminal 40,
+  `"SCALE RELAYS DB".Calibration_Relay_K1` (DB60.DBX7.6).
+- **K2 "Power Sw relay"** — bridges the scale's remote ON/OFF terminal to
+  its Com terminal, i.e. energizing it is equivalent to pressing the
+  scale's own power button. Coil on PLC terminal 39,
+  `"SCALE RELAYS DB".PowerSw_Relay_K2` (DB60.DBX7.7).
+
+`FC156 "SCALE POWER-UP CALIBRATION"` runs the exact sequence Michou
+specified (2026-10-01): on a `Recal_Request` rising edge (ignored if a
+sequence is already running), energize K1, pulse K2 on for 1s then
+release it (power-cycles the scale while the calibration shunt is
+already connected), wait 5s for the scale to boot/calibrate against the
+shunt, then release K1. State lives in DB60 (`Recal_Step` 0-4,
+`Recal_ReqMem` edge memory), using timers T52/T53 (confirmed unused
+elsewhere in the 410 project, same check as T50/T51).
+
+**Still open**: nothing calls FC156 yet (needs a `CALL` added to OB1,
+not tracked in this repo); `Recal_Request` isn't wired to an HMI button
+yet; DB60's `Reserved_Byte0-6` are padding, not a real export — if DB60
+already exists on the live PLC with other fields in use, replace them
+with a real capture before downloading this source.
+
 ## Files
 
 - `FC155 GLUE SCALE LOGIC` — canonical source, version 0.19. SFC14 reads,
@@ -168,6 +197,13 @@ true, both were uploaded from the live, working PLC project.
 - `HMI DB 10` — the HMI comms DB (DB10), version 0.3, owned by FC160,
   not this project's source of truth. Referenced here because FC155's
   HMI bridge (above) reads/writes several of its fields by symbol name.
+- `FC156 SCALE POWER-UP CALIBRATION` — NEW, version 0.1. Runs the KWS
+  CY300 power-up calibration workaround (K1/K2 relay sequence) — see
+  "Power-up calibration workaround" above.
+- `DB60_SCALE_RELAYS_DB.awl` — NEW, version 0.1. `"SCALE RELAYS DB"`,
+  holds the K1/K2 relay output bits and FC156's sequencing state. Bytes
+  0-6 are reserved padding, not a real online export — see that file's
+  own header.
 
 ## Still open
 
@@ -183,3 +219,5 @@ true, both were uploaded from the live, working PLC project.
 - The touch panel's own screen project needs its tags re-pointed to
   match `"HMI DB"` v0.3's restructured offsets — outside this repo, can't
   be done from here.
+- FC156 isn't called from anywhere yet (needs adding to OB1) and its
+  `Recal_Request` trigger isn't wired to an HMI button.
