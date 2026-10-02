@@ -243,7 +243,25 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms FC155
 //     online FC155 rebuild, 2026-10-02). No logic change from FC156
 //     v0.3 - same DB105 state (ReCalib_Step/PowerOff_Step etc.) and
 //     "OUTPUTS DB".KILOTECK_Calib_K1/KILOTECK_Power_K2 targets.
-VERSION : 0.21
+//
+// v0.22 changes vs v0.21 - per Michou (2026-10-02): "Scale_ReCalib_Req
+//   need to power off the scale to recalib" - the power-on+calibrate
+//   sequence now powers the scale off FIRST (new step 1, a 3s K2 pulse
+//   reusing timer T54, the same action the standalone power-off
+//   sequence uses) before engaging K1 and running the existing
+//   power-on+calibrate cycle (now steps 2-5, renumbered from 1-4).
+//   Previously this sequence assumed the scale was already off when
+//   triggered; now it forces that state itself, so Scale_ReCalib_Req
+//   alone is a complete "fully recalibrate the scale" action regardless
+//   of its current power state.
+//   Also confirmed by Michou: Scale_ReCalib_Req compiles to DB105.DBX31.2,
+//   Scale_PowerOff_Req to DB105.DBX31.1 on the live PLC - informational
+//   only, not adopted into this struct's own field order (all access
+//   here is symbolic, and this repo's struct layout doesn't match the
+//   live one closely enough byte-for-byte to try forcing those exact
+//   offsets without a full DB105 re-export - see that block's own v0.13
+//   changelog).
+VERSION : 0.22
 
 
 VAR_TEMP
@@ -621,15 +639,22 @@ WSCN: L     "GLUE SCALE CONTROL DB".LampScanStep;
 WLDN: NOP   0;
 
 NETWORK
-TITLE =Power-on + calibrate sequence - K1 on for a flat 5s, K2 pulsed 0.5s inside that window
+TITLE =Power-on + calibrate sequence - powers the scale off first, then K1 on for a flat 5s, K2 pulsed 0.5s inside that window
 // KWS CY300 power-up defect workaround (Michou, 2026-10-01/02): the
 // scale resets its zero/calibration reference every power-up. Closing
 // the calibration shunt (K1) BEFORE power-cycling the scale (K2) means
 // the scale sees the known shunt reference the moment it boots.
 // K2 is a momentary button-press simulation, not a plain on/off - a
-// SHORT 0.5s pulse powers the scale ON.
-//   ReCalib_Step: 0 idle, 1 K1 on/T53 (5s hold) started, 2 K2 0.5s
-//   pulse (T52), 3 waiting for T53 to elapse, 4 K1 off/done.
+// SHORT 0.5s pulse powers the scale ON, a LONG 3s pulse powers it OFF.
+// Per Michou: "Scale_ReCalib_Req need to power off the scale to
+// recalib" - recalibrating needs a full power cycle, not just toggling
+// K1 while the scale is already running, so step 1 below pulses K2 for
+// 3s (power OFF, reusing the same T54 timer as the standalone
+// power-off sequence) before K1 engages and the power-on+calibrate
+// cycle runs.
+//   ReCalib_Step: 0 idle, 1 K2 3s power-off pulse (T54), 2 K1 on/T53
+//   (5s hold) started, 3 K2 0.5s power-on pulse (T52), 4 waiting for
+//   T53 to elapse, 5 K1 off/done.
 // Ignored while PowerOff_Step is mid-sequence, so K1/K2 are never
 // driven by both sequences in the same scan.
       A     "GLUE SCALE CONTROL DB".Scale_ReCalib_Req;
@@ -664,33 +689,48 @@ RC_STP: L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     4;
       ==I   ;
       JC    RC_S4;
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     5;
+      ==I   ;
+      JC    RC_S5;
       JU    RC_DN;
 
-RC_S1: S     "OUTPUTS DB".KILOTECK_Calib_K1;
-      L     S5T#5S;
-      SD    T     53;
+RC_S1: S     "OUTPUTS DB".KILOTECK_Power_K2;
+      L     S5T#3S;
+      SD    T     54;
+      A     T     54;
+      JCN   RC_DN;
+      R     "OUTPUTS DB".KILOTECK_Power_K2;
+      R     T     54;
       L     2;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
       JU    RC_DN;
 
-RC_S2: S     "OUTPUTS DB".KILOTECK_Power_K2;
+RC_S2: S     "OUTPUTS DB".KILOTECK_Calib_K1;
+      L     S5T#5S;
+      SD    T     53;
+      L     3;
+      T     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      JU    RC_DN;
+
+RC_S3: S     "OUTPUTS DB".KILOTECK_Power_K2;
       L     S5T#500MS;
       SD    T     52;
       A     T     52;
       JCN   RC_DN;
       R     "OUTPUTS DB".KILOTECK_Power_K2;
       R     T     52;
-      L     3;
-      T     "GLUE SCALE CONTROL DB".ReCalib_Step;
-      JU    RC_DN;
-
-RC_S3: A     T     53;
-      JCN   RC_DN;
       L     4;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
       JU    RC_DN;
 
-RC_S4: R     "OUTPUTS DB".KILOTECK_Calib_K1;
+RC_S4: A     T     53;
+      JCN   RC_DN;
+      L     5;
+      T     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      JU    RC_DN;
+
+RC_S5: R     "OUTPUTS DB".KILOTECK_Calib_K1;
       R     T     53;
       L     0;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;

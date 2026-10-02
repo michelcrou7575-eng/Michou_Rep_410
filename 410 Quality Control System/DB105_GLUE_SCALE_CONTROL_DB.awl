@@ -196,7 +196,23 @@ TITLE =Glue Scale Weight Control and Alarms  DB105
 //   in 16 bits). Also folds FC156's two sequences directly into FC155
 //   (per Michou: "FC155 containes your FC156") - this DB's own fields
 //   are unchanged by that move, only FC155/FC156 as files change.
-VERSION : 0.12
+//
+// v0.13 changes vs v0.12 - per Michou (2026-10-02): "Scale_ReCalib_Req
+//   need to power off the scale to recalib" - the power-on+calibrate
+//   sequence now powers the scale off first, so ReCalib_Step runs 0-5,
+//   not 0-4 (see FC155 v0.22 for the step logic). No field changes
+//   here, comment only.
+//   Also confirmed by Michou: on the live PLC, Scale_ReCalib_Req
+//   compiles to DB105.DBX31.2 and Scale_PowerOff_Req to DB105.DBX31.1 -
+//   informational only. Not adopted into this struct's declared field
+//   order: this repo's own struct layout has diverged too far from the
+//   live one (different field count/order built up over many online
+//   syncs) to reliably reproduce those exact byte/bit offsets without a
+//   fresh full DB105 export - every access in FC155 is symbolic by
+//   name, so the declared order here doesn't need to match the live
+//   compiled offsets for correctness, only the field names need to
+//   agree, which they do.
+VERSION : 0.13
 
   STRUCT
    GrossWeight_Actual : INT ;	//Parsed live weight from KWS CY300 scale (kg) - whole kg, scale's decimal digit is discarded (see FC155)
@@ -210,7 +226,7 @@ VERSION : 0.12
    NegativeUnderScore_Value : INT ;	//Fixed sentinel value the KWS CY300 sends when its reading is negative (scale fault) - confirmed -20663 by Michou, INT (fits fine) - see FC155
    Hysteresis : INT ;	//Reserved - no longer read by FC155's pump-control network (see v0.3 changelog); kept for struct-layout compatibility
    LampScanStep : INT ;	//NEW v0.9 - current white-lamp scan index (1/2/3) while the pump runs - see FC155
-   ReCalib_Step : INT ;	//NEW v0.11 - power-on+calibrate sequence step, 0-4 - see FC155
+   ReCalib_Step : INT ;	//NEW v0.11 - power-on+calibrate sequence step, 0-5 (now powers off first, v0.13) - see FC155
    PowerOff_Step : INT ;	//NEW v0.11 - power-off sequence step, 0-1 - see FC155
    SpareReal1 : REAL ;	//NEW v0.7 - appeared online, not yet wired to anything
    SpareReal2 : REAL ;	//NEW v0.7 - appeared online, not yet wired to anything

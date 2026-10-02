@@ -183,19 +183,24 @@ FC155 runs two independent sequences, with sequencing state in DB105
 output DB):
 
 - **Power-on + calibrate** (`Scale_ReCalib_Req` rising edge, ignored
-  while a power-off is mid-sequence): energize K1, hold it on for a flat
-  5s (`ReCalib_Step` 1→4), pulsing K2 on for 0.5s inside that same window
-  (started the same scan K1 turns on) to power the scale up while the
-  calibration shunt is already connected — the scale sees the known
-  shunt reference the moment it boots. K1 releases when the 5s elapses.
+  while a power-off is mid-sequence): recalibrating needs a full power
+  cycle, not just toggling K1 while the scale is already running — so
+  this first pulses K2 for 3s to power the scale OFF (`ReCalib_Step`
+  1, reusing the same T54 timer as the standalone power-off sequence
+  below), then energizes K1, holds it on for a flat 5s (`ReCalib_Step`
+  2→5), pulsing K2 on for 0.5s inside that same window to power the
+  scale back up while the calibration shunt is already connected — the
+  scale sees the known shunt reference the moment it boots. K1 releases
+  when the 5s elapses.
 - **Power-off** (`Scale_PowerOff_Req` rising edge, ignored while a
   power-on/calibrate is mid-sequence): just a 3s K2 pulse
   (`PowerOff_Step` 1→0), no K1 involved.
 
 Each sequence guards against starting while the other is running, so
 K1/K2 are never driven by both in the same scan. Timers: T52 (0.5s
-power-on pulse), T53 (5s K1 hold), T54 (3s power-off pulse) — confirmed
-unused elsewhere in the 410 project, same check as T50/T51.
+power-on pulse), T53 (5s K1 hold), T54 (3s power-off pulse, shared by
+both sequences) — confirmed unused elsewhere in the 410 project, same
+check as T50/T51.
 
 **Still open / flagged for confirmation**:
 - Nothing calls this sequence's `Scale_ReCalib_Req`/`Scale_PowerOff_Req`
@@ -211,7 +216,7 @@ unused elsewhere in the 410 project, same check as T50/T51.
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.21. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.22. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), pump control with
   overfill/underfill interlock, platform-weight sanity check + scale-fault
   pump interlock, alarm latching and reset, HMI DB bridge (setpoints, live
@@ -228,7 +233,7 @@ unused elsewhere in the 410 project, same check as T50/T51.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
   limits, scale-fault sentinel, platform-weight sanity limit, pump/alarm
   output bits, alarm reset, lamp scan state, power-on/power-off
-  sequencing state. Version 0.12. Symbol is `"GLUE SCALE CONTROL DB"`
+  sequencing state. Version 0.13. Symbol is `"GLUE SCALE CONTROL DB"`
   (spaces) to match what FC155 actually references.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.
