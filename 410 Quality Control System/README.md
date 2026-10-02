@@ -6,6 +6,25 @@ parses the ASCII weight into an INT (whole kg — the scale's decimal digit is
 discarded, fractional precision isn't needed), and drives a glue fill pump
 with a start/stop weight band plus latching over/underfill alarms.
 
+## S7-300 STL hard limits (read before adding networks/labels)
+
+Hit for real on 2026-10-02 (33 compile errors) — worth stating plainly so
+it isn't rediscovered the same way again:
+
+- **Jump labels (`JU`/`JC`/`JCN` targets) are 1-4 characters, letters and
+  digits only — no underscores, no longer names.** This is a hard S7-300
+  STL encoding limit (unlike IEC/SCL named labels), not a style choice.
+  `RC_STP`, `PWOF_DN`, etc. all failed to compile for this reason.
+- **A FUNCTION/DATA_BLOCK's title/header comment block has a hard total
+  size limit.** FC155's accumulated changelog grew to ~290 lines and
+  STEP7 failed with "Byte offset/number too big" right at the VERSION
+  line. Keep the header's changelog short (a few lines per version, or a
+  condensed multi-version summary like the one below) — full history
+  lives in git log, not in the compiled source's comment block.
+- **Individual network titles and inline comments are also length-capped**
+  (STEP7 just silently truncates past the limit — a "Comment or title
+  length too big" warning, not a fatal error, but still lossy).
+
 ## Hardware / signal chain
 
 ```
@@ -212,18 +231,19 @@ elsewhere in the 410 project, same check as T50/T51.
 **Still open / flagged for confirmation**:
 - None of `Scale_ReCalib_Req`/`Scale_PowerOFF_Pulse`/`Scale_PowerON_Pulse`
   are wired to HMI buttons yet.
-- Michou's own online FC155 rebuild (2026-10-02) references
-  `"OUTPUTS DB".WHT_SWL_1_Pnl`/`WHT_SWL_2_Pnl`/`WHT_SWL_3_Pnl`/
-  `RED_LED_Pnl`/`GRN_LED_Pnl` (a `_Pnl` suffix) instead of the plain
-  names this repo's FC155/DB60 use. The DB60 export this repo's
-  `DB60_OUTPUTS_DB.awl` is built from (2026-10-01) still has the plain
-  names, so that's what's tracked — if `_Pnl` is a real, intentional
-  rename, re-export DB60 and FC155's lamp/alarm networks need updating
-  together, or this won't compile.
+- The `_Pnl` suffix question (Michou's earlier FC155 upload referenced
+  `WHT_SWL_1_Pnl`/`2_Pnl`/`3_Pnl`/`RED_LED_Pnl`/`GRN_LED_Pnl`) is now
+  **confirmed real for `RED_LED`/`GRN_LED`** — a real STEP7 compile
+  (2026-10-02) failed with "Symbol RED_LED is not a component of
+  OUTPUTS DB" for exactly those two, now renamed
+  `RED_LED_Pnl`/`GRN_LED_Pnl` throughout (FC155 v0.24, DB60 v0.2). That
+  same compile did NOT flag `WHT_SWL_1/2/3`, so those are left as plain
+  names — correct as far as the evidence goes, but not independently
+  confirmed the way RED/GRN now are.
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.23. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.24. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), pump control with
   overfill/underfill interlock, platform-weight sanity check + scale-fault
   pump interlock, alarm latching and reset, HMI DB bridge (setpoints, live
@@ -240,7 +260,7 @@ elsewhere in the 410 project, same check as T50/T51.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
   limits, scale-fault sentinel, platform-weight sanity limit, pump/alarm
   output bits, alarm reset, lamp scan state, power-on/power-off
-  sequencing state. Version 0.14. Symbol is `"GLUE SCALE CONTROL DB"`
+  sequencing state. Version 0.15. Symbol is `"GLUE SCALE CONTROL DB"`
   (spaces) to match what FC155 actually references.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.
@@ -280,6 +300,9 @@ elsewhere in the 410 project, same check as T50/T51.
 - `PlatformMinWeight_SP` (30kg) is a best-guess default from Michou's
   "Platform free weight" description — confirm against the actual empty
   platform reading before relying on it to gate the pump.
-- The `_Pnl` lamp-symbol suffix question (from Michou's 2026-10-02 FC155
-  upload, not adopted here) — see "Power-up calibration workaround"
-  above.
+- The `_Pnl` lamp-symbol suffix for `WHT_SWL_1/2/3` — see "Power-up
+  calibration workaround" above and "S7-300 STL hard limits" at top.
+- Many NETWORK titles and inline comments throughout FC155/DB105 are
+  long enough to trigger STEP7's "Comment or title length too big"
+  warning (non-fatal, just silently truncated) — not fixed yet, lower
+  priority than the fatal errors this round addressed.

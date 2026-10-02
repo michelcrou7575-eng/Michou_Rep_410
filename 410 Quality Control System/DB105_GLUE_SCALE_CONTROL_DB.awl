@@ -1,242 +1,35 @@
-DATA_BLOCK "GLUE SCALE CONTROL DB"    
+DATA_BLOCK "GLUE SCALE CONTROL DB"
 TITLE =Glue Scale Weight Control and Alarms  DB105
-// v0.3 changes vs v0.2 - synced against the live online DB (see
-//   DB105_Online_1.xps, captured 2026-09-17): these fields were added/
-//   renamed directly online, ahead of this source file. Brought back in
-//   sync so FC104 compiles against real field names/offsets - see
-//   FC104 v0.12 for the corresponding logic changes.
-//   - Setpoint_Fill (4.0) -> Fill_Start_SP (4.0) / Fill_Stop_SP (8.0):
-//     valve now opens below Fill_Start_SP and closes at/above
-//     Fill_Stop_SP directly - the gap between the two IS the hysteresis
-//     band now, replacing the old Setpoint_Fill +/- Hysteresis
-//     calculation. Hysteresis (still declared below, now at 24.0) is no
-//     longer read by FC104's valve network - kept in the struct only
-//     because removing it would shift every offset after it; left as an
-//     unused/reserved field pending a decision on whether it should
-//     still apply on top of the two setpoints.
-//   - NEW NegativeUnderScore_Value (20.0): fixed sentinel the KWS CY300
-//     sends in the integer-part field when its reading goes negative -
-//     confirmed live at 5222222 (all 7 digits of the Byte_0-6 field
-//     filled, no leading spaces). Not a real weight - FC104 now compares
-//     GrossWeight_Actual against this every scan to catch a scale fault.
-//   - NEW SpareReal (28.0): appeared online, not yet wired to anything.
-//   - Address 32.5 (Scale_Powered_On) appeared online - carried over
-//     as-is, not wired by FC104 yet, no confirmed intended behavior.
-//   - Address 32.6 (was a plain spare bit online) repurposed here as
-//     Alarm_ScaleFault - latching output, set when GrossWeight_Actual
-//     matches NegativeUnderScore_Value (see FC104).
-//   - Initial values below are set to match the live/tuned Actual
-//     values captured in DB105_Online_1.xps (Fill_Start_SP=50,
-//     Fill_Stop_SP=70, AlarmLimit_Overfill=80, AlarmLimit_Underfill=20,
-//     Hysteresis=2, NegativeUnderScore_Value=5222222) rather than the
-//     all-zero initial values the online capture showed for every
-//     field - a cold download of this source would otherwise silently
-//     wipe the operator's live tuning back to zero.
+// History (full blow-by-blow in git log, this comment block was
+// trimmed 2026-10-02 after FC155's own header grew past STEP7's
+// title/comment size limit and failed to compile - "Byte offset/number
+// too big". This DB's header was getting close too. Keep future
+// entries short.):
 //
-// v0.4 changes vs v0.3:
-//   - Address 32.7 (was SpareBool_2) repurposed as Reset_Alarms - a
-//     single HMI-driven command bit that clears all three latching
-//     alarms (Overfill, Underfill, ScaleFault) at once. FC104's new
-//     reset network reads this bit directly (level-conditioned, not
-//     edge-detected) - FC104 is a FUNCTION with no static memory of its
-//     own to hold edge-detect state in, and a plain level read is
-//     sufficient for a momentary HMI acknowledge button: R only forces
-//     the alarms to 0 while this bit is TRUE, and each alarm's own
-//     latch network is free to re-set it the very next scan if the
-//     underlying fault is still present - it cannot be permanently
-//     masked by holding the button down.
-//
-// v0.5 changes vs v0.4 - canonicalize on FC155 (per Michou's call):
-//   the live PLC project compiled this DB's owning FUNCTION as FC104,
-//   then renumbered it FC155 "GLUE SCALE LOGIC" and renamed this DB's
-//   own symbol from "GLUE_SCALE_CONTROL_DB" to "GLUE SCALE CONTROL DB"
-//   (spaces, matching FC155's actual CALL/read references - confirmed
-//   by diffing FC155's STEP7 export against FC104_GLUE_SCALE.awl v0.13:
-//   logic is byte-for-byte identical, only the block number and symbol
-//   names differ). FC104_GLUE_SCALE.awl is deleted from this repo -
-//   FC155 is now the sole tracked source for this logic. Only this
-//   DATA_BLOCK header line changed (symbol name); every field, offset,
-//   and initial value below is unchanged from v0.4.
-//
-// v0.6 changes vs v0.5 - REAL -> INT for the scale weight/setpoints
-//   (per Michou's call - the scale transaction doesn't need fractional
-//   precision; every live setpoint was already a whole number anyway:
-//   Fill_Start_SP=50, Fill_Stop_SP=70, AlarmLimit_Overfill=80,
-//   AlarmLimit_Underfill=20, Hysteresis=2). GrossWeight_Actual,
-//   Fill_Start_SP, Fill_Stop_SP, AlarmLimit_Overfill,
-//   AlarmLimit_Underfill and Hysteresis are now INT - see FC155 v0.14
-//   for the corresponding parse/compare changes (Byte_8's decimal digit
-//   is now discarded, not converted).
-//   NegativeUnderScore_Value is the one exception - stays DINT (was
-//   REAL, NOT changed to plain INT): the sentinel value is 5222222,
-//   which does not fit in 16-bit INT range (+/-32767) - a plain INT
-//   would silently wrap it and the fault comparison would never match
-//   again. FC155 now compares the wide #IntPart temp against this DINT
-//   BEFORE truncating it into the INT GrossWeight_Actual - see that
-//   block's changelog.
-//   SpareReal is untouched (REAL) - it isn't part of the scale
-//   transaction, no reason to touch its type here.
-//   Initial values below carry the same live-tuned numbers forward in
-//   their new INT/DINT representation - no setpoint value changed.
-//
-// v0.7 changes vs v0.6 - synced against a fresh online capture
-//   (2026-09-25): SpareReal1, SpareReal2 and SpareReal3 appeared online,
-//   added directly after SpareReal (4 REAL spares total now, offsets
-//   16.0/20.0/24.0/28.0) - same "operator edits online, source catches
-//   up after" pattern as v0.3. Pushes the BOOL block back out to byte
-//   32 (Alarm_ScaleFault is DBX32.6 again, not DBX20.6 as v0.6 alone
-//   would have compiled to) - confirmed against the online Address
-//   column, not assumed. Not wired to anything - same
-//   unused/reserved status as the original SpareReal, no confirmed
-//   intended behavior for any of the four.
-//
-// v0.8 changes vs v0.7 - synced against Michou's own online rebuild of
-//   FC155 (uploaded as root-level "FC155"/"DB10", 2026-09-29), which was
-//   built directly from v0.15 (missing this repo's v0.16/v0.17 work) and
-//   diverged independently - reconciled here rather than overwritten:
-//   - AlarmLimit_Overfill -> AlarmLimit_Overfill_SP, AlarmLimit_Underfill
-//     -> AlarmLimit_Underfill_SP: renamed to match the setpoint naming
-//     Michou used on the matching "HMI DB" fields.
-//   - NEW GrossWeight_Actual_Mem : INT - snapshot of GrossWeight_Actual
-//     taken once, on the scan the pump is newly commanded on (edge-
-//     detected via a memory-bit FP in FC155's pump-control network).
-//     FC155 subtracts this from the live GrossWeight_Actual to compute
-//     "HMI DB".Actual_Transfered_Weight - confirmed by Michou: "from the
-//     actual PUMP Start".
-//   - Valve_Open -> Pump_ON, Valve_Open_Prev -> Pump_ON_Prev: per
-//     Michou's call - this output has never driven a valve, it drives
-//     "HMI DB".Glue_Fill_Pump_ON (a pump), and the old name was actively
-//     confusing given that.
-//   - NegativeUnderScore_Value's live compiled offset was DBD10 in
-//     Michou's upload but FC155 there read it via the raw address
-//     `L DB105.DBD 10` instead of the symbolic name - fixed back to
-//     symbolic in FC155 v0.18 (see that block's changelog) - flagged
-//     here since a raw address like that silently breaks the instant
-//     this struct is reordered, exactly the class of bug this project
-//     has hit repeatedly elsewhere (DB30, DB889).
-//
-// v0.9 changes vs v0.8 - alarm interlock and lamp outputs, per Michou's
-//   spec (2026-09-29):
-//   - NEW LampScanClockMem : BOOL, LampScanStep : INT - support state
-//     for FC155's white-lamp "scan" pattern (WHT_SWL_1/2/3 cycling
-//     1-2-3-1... while the pump runs). LampScanClockMem is a one-scan
-//     500ms flasher pulse (T51 - confirm this timer isn't used
-//     elsewhere in the 410 project, same caution as T50); LampScanStep
-//     is the current lamp index (1/2/3), reset to 1 when the pump
-//     stops. See FC155 v0.19 for the full pattern - not bench-verified.
-//   - Overfill/Underfill now interlock Pump_ON directly (FC155 v0.19):
-//     either latched forces the pump off and keeps it off until
-//     Reset_Alarms clears it. Previously they only set their own alarm
-//     bits with no effect on pump operation.
-//
-// v0.10 changes vs v0.9 - platform weight sanity check, per Michou
-//   (2026-10-02): the empty platform itself weighs at least ~30kg (its
-//   own structure/dead weight) - a GROSS reading below that (his
-//   examples: 0, or a corrupted negative value like -20663) means the
-//   reading itself can't be trusted, not a real underfill. NEW
-//   PlatformMinWeight_SP : INT (default 30) - FC155 now also latches
-//   Alarm_ScaleFault when GrossWeight_Actual falls below this, same
-//   bit/behavior as the existing 5222222-sentinel check (both mean "this
-//   weight reading is not real"). Kept as an internal constant, not
-//   bridged to "HMI DB" - it's the platform's own mechanical tare, not a
-//   per-job operator setpoint like Fill_Start/Stop; can be wired to HMI
-//   later if wanted. Also: Alarm_ScaleFault now forces Pump_ON off
-//   immediately (new unconditional interlock, FC155 v0.20) rather than
-//   just freezing it at its last commanded state - per Michou: "No Pump
-//   work!"
-//
-// v0.11 changes vs v0.10 - reconciled against Michou's own online
-//   rebuild (uploaded as root-level "DB105"/"FC155", 2026-10-02), which
-//   added FC156's power-on/calibrate sequencing state directly here
-//   (matching this repo's own v0.10-era design intent, just named
-//   differently) and a few other fields independently - merged, not
-//   overwritten:
-//   - NEW ReCalib_Step : INT, Scale_ReCalib_Req : BOOL, ReCalib_ReqMem :
-//     BOOL - FC156's power-on+calibrate sequencing state. Field name/
-//     bit-name choices (ReCalib_Step, Scale_ReCalib_Req) match exactly
-//     what Michou's own upload used; ReCalib_ReqMem (edge memory) is
-//     this repo's own addition, not in his upload. See FC156 v0.3.
-//   - NEW PowerOff_Step : INT, Scale_PowerOff_Req : BOOL,
-//     PowerOff_ReqMem : BOOL - the power-off sequence, per Michou's
-//     newer chat spec (2026-10-02, not yet in any upload): same naming
-//     pattern as the ReCalib_* fields above. See FC156 v0.3.
-//   - NEW Actual_Transfered_Weight : INT - appeared in his upload,
-//     declared but not wired to anything there either (FC155's "Compute
-//     weight..." network still only writes "HMI DB".
-//     Actual_Transfered_Weight, not this field) - carried forward as an
-//     unused/reserved field, same as every other appeared-online-first
-//     addition in this DB's history.
-//   - NEW Scale_PowerON_Pulse, Spare_11..Spare_15 : BOOL - appeared in
-//     his upload, also unreferenced anywhere - carried forward as
-//     spares, no confirmed intended behavior.
-//   - DROPPED SpareReal, SpareReal3 (his upload only kept SpareReal1/
-//     SpareReal2) - matches his own online edit; neither was ever wired
-//     to anything, so no behavior lost.
-//   - NOT adopted: his upload also redefined NegativeUnderScore_Value as
-//     INT := -20663 (was DINT := L#5222222) and retitled its check
-//     network "...matches the scale's -20663 Value" - this would
-//     silently stop catching the real, previously-confirmed 5222222
-//     sentinel telegram. Kept NegativeUnderScore_Value as-is (DINT,
-//     5222222, unchanged) - the new PlatformMinWeight_SP check (v0.10)
-//     already catches both his example bad values (0 and -20663, and
-//     anything else implausibly low) without needing a second exact
-//     magic-number match. If -20663 is actually a real observed scale
-//     telegram value (not a test/debug value), flag it back - the
-//     5222222 sentinel and PlatformMinWeight_SP range check can both
-//     stay in place alongside a third exact-match check if truly needed.
-//
-// v0.12 changes vs v0.11 - confirmed by Michou (2026-10-02): -20663 IS
-//   the real value, not a test artifact - "the INT the Scale gives when
-//   Negative Weight is computed", explicitly replacing 5222222/DINT
-//   ("no more DINT/5222222!"). NegativeUnderScore_Value reverts to INT
-//   (fits fine - -20663 is well within +/-32767, unlike 5222222), value
-//   -20663. See FC155 v0.21 for the corresponding comparison-network
-//   change (now runs on the truncated INT GrossWeight_Actual, not the
-//   wide DINT parse temp - no longer needed now that the sentinel fits
-//   in 16 bits). Also folds FC156's two sequences directly into FC155
-//   (per Michou: "FC155 containes your FC156") - this DB's own fields
-//   are unchanged by that move, only FC155/FC156 as files change.
-//
-// v0.13 changes vs v0.12 - per Michou (2026-10-02): "Scale_ReCalib_Req
-//   need to power off the scale to recalib" - the power-on+calibrate
-//   sequence now powers the scale off first, so ReCalib_Step runs 0-5,
-//   not 0-4 (see FC155 v0.22 for the step logic). No field changes
-//   here, comment only.
-//   Also confirmed by Michou: on the live PLC, Scale_ReCalib_Req
-//   compiles to DB105.DBX31.2 and Scale_PowerOff_Req to DB105.DBX31.1 -
-//   informational only. Not adopted into this struct's declared field
-//   order: this repo's own struct layout has diverged too far from the
-//   live one (different field count/order built up over many online
-//   syncs) to reliably reproduce those exact byte/bit offsets without a
-//   fresh full DB105 export - every access in FC155 is symbolic by
-//   name, so the declared order here doesn't need to match the live
-//   compiled offsets for correctness, only the field names need to
-//   agree, which they do.
-//
-// v0.14 changes vs v0.13 - Michou refactored this struct directly online
-//   (2026-10-02: "New DATA_BLOCK 'GLUE SCALE CONTROL DB'!") - reconciled
-//   here (see FC155 v0.23 for the corresponding logic changes):
-//   - PlatformMinWeight_SP moved later in the struct (now right after
-//     ReCalib_Step) and gained an inline struct-level default (`: INT :=
-//     30`) in addition to its BEGIN-block initializer - purely cosmetic,
-//     no behavior change, both still resolve to 30.
-//   - REMOVED PowerOff_Step, ReCalib_ReqMem, Scale_PowerOff_Req,
-//     PowerOff_ReqMem - the standalone power-off sequence no longer
-//     needs a step counter for a single timed action; see FC155 v0.23.
-//   - RENAMED/NEW: Scale_PowerOff_Req -> Scale_PowerOFF_Pulse (same
-//     role, standalone power-off trigger, simplified). NEW
-//     Scale_PowerON_Pulse - a standalone power-on-only trigger that
-//     didn't exist before (previously power-on only ever happened as
-//     part of the full ReCalib sequence).
-//   - SpareReal1 dropped (only SpareReal2 remains); NEW generic
-//     Spare_INT : INT.
-//   - GrossWeight_Actual's initial value is -20663 again (was reset to 0
-//     in v0.10) - appears to be a deliberate choice on Michou's part
-//     (same value he's used before as a known-fault test state), kept
-//     as-is rather than reset again.
-VERSION : 0.14
+// v0.3-v0.7: synced field names/offsets/types against repeated live
+//   online edits (Setpoint_Fill->Fill_Start_SP/Fill_Stop_SP,
+//   NegativeUnderScore_Value sentinel added, Reset_Alarms added,
+//   REAL->INT conversion, SpareReal1-3 appeared online).
+// v0.8-v0.9: reconciled against Michou's parallel online FC155 rebuild
+//   (AlarmLimit_*_SP naming, GrossWeight_Actual_Mem snapshot,
+//   Valve_Open->Pump_ON rename); added LampScanClockMem/LampScanStep
+//   for the white-lamp scan pattern; Overfill/Underfill now interlock
+//   Pump_ON.
+// v0.10-v0.12: added PlatformMinWeight_SP (empty-platform ~30kg sanity
+//   check, same alarm bit as the scale-fault sentinel); added then
+//   confirmed NegativeUnderScore_Value is INT -20663 (not DINT
+//   5222222 as first assumed - Michou: "no more DINT/5222222!").
+// v0.13-v0.14: ReCalib_Step now powers the scale off first (0-5, not
+//   0-4); Michou refactored this struct directly online - removed
+//   PowerOff_Step/ReCalib_ReqMem/PowerOff_ReqMem, replaced the
+//   standalone power-off trigger with Scale_PowerOFF_Pulse, added
+//   Scale_PowerON_Pulse (new standalone power-on trigger),
+//   PlatformMinWeight_SP moved + gained an inline default, SpareReal1
+//   dropped (SpareReal2 remains) + NEW Spare_INT, GrossWeight_Actual's
+//   initial value is -20663 (deliberate test-state default).
+VERSION : 0.15
 
- STRUCT 	
+ STRUCT
    GrossWeight_Actual : INT ;	//Parsed live weight from KWS CY300 scale (kg) - whole kg, scale's decimal digit 
    GrossWeight_Actual_Mem : INT ;	//Snapshot of GrossWeight_Actual taken on the scan the pump Started
    Fill_Start_SP : INT ;	//Operator-entered fill-start weight (kg) - pump turns on below this - HMI writab
