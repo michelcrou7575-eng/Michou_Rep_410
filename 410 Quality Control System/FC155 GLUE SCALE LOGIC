@@ -11,62 +11,64 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Pump Control, Alarms, KWS CY300 power/c
 //   conversion for weight/setpoints.
 // v0.15-v0.17: HMI DB (DB10) bridge - setpoints, live weight,
 //   transfered-weight calc, bottomer-velocity mirror, drove the real
-//   pump output (nothing did before this - Glue_Fill_Pump_ON was
-//   declared but unused).
-// v0.18-v0.19: Valve_Open renamed Pump_ON throughout (drives a pump,
-//   never a valve); reconciled against Michou's own parallel online
-//   rebuild; overfill/underfill now interlock the pump; added lamp scan
-//   pattern (WHT_SWL_1/2/3) and alarm lamps (RED_LED/GRN_LED).
-// v0.20-v0.21: added PlatformMinWeight_SP sanity check (GrossWeight_Actual
-//   must exceed the empty platform's ~30kg dead weight) and an
-//   unconditional scale-fault pump interlock (active stop, not just a
-//   frozen last-state hold). Confirmed scale-fault sentinel is INT
-//   -20663 (not DINT 5222222 as first assumed).
-// v0.22-v0.24: folded the separate FC156 power-up-calibration logic in
-//   here; recalibration powers the scale off first (3s K2 pulse) before
-//   the K1-then-K2-on cycle; fixed real STEP7 compile errors (jump
-//   labels >4 chars/underscores, RED_LED/GRN_LED -> _Pnl, this header's
-//   own size); trimmed this header for the first time.
+//   pump output.
+// v0.18-v0.19: Valve_Open renamed Pump_ON throughout; overfill/underfill
+//   now interlock the pump; added lamp scan pattern and alarm lamps.
+// v0.20-v0.21: added PlatformMinWeight_SP sanity check and an
+//   unconditional scale-fault pump interlock. Confirmed scale-fault
+//   sentinel is INT -20663.
+// v0.22-v0.25: folded FC156's power-up-calibration logic in here;
+//   recalibration powers the scale off first; fixed real STEP7 compile
+//   errors (jump labels, RED_LED/GRN_LED -> _Pnl, header size); fixed a
+//   missing SET; before S/R coils reached via jump (RCS1/RCS2/RCS3/RCS5,
+//   LSRS); adopted Michou's VAR_TEMP renames, "Update" network, and
+//   WHT_SWL_1/2/3 -> _Pnl.
 //
-// v0.25 changes vs v0.24 - reconciled against Michou's own further
-//   online edits (2026-10-02) and fixed a real bug he found ("ReCalib_Step
-//   goes to value 3 and stuck"):
-//   - BUG FIX: RCS1/RCS2/RCS3/RCS5 each start with an S/SD/R "coil"
-//     instruction immediately after a JC-jumped-to label, with no
-//     explicit SET; before it. This file's own OWN pre-existing pump-
-//     control network (OPEN/TRXF/CLOS) and the White-lamps network
-//     (WTON) already establish the pattern this needs: RLO can't be
-//     trusted to be 1 just because a jump landed there, so S/R/SD coils
-//     right after a label need an explicit SET; first. RCS4 didn't need
-//     it (starts with A, a bit-logic instruction that loads fresh
-//     regardless). Added SET; to the other four. This is the most
-//     likely cause of the stuck-step symptom, but not certain - flagged
-//     to Michou: if steps still stick after this, the next suspect is a
-//     Timer 52 collision with something elsewhere in the live project
-//     this repo can't see (same risk class as T50/T51's original
-//     caution, never fully closed out for T52-T56 either).
-//   - Dropped a stray `L "Timer 54";` in RCS1 that loaded the timer's
-//     current value and did nothing with it (dead code, harmless but
-//     pointless - the following `A "Timer 54"` already reads its
-//     status fresh regardless of what came before).
-//   - Adopted Michou's further online changes verbatim: VAR_TEMP names
-//     (RetVal1->RET_VALUE_1 etc.), a NEW "Update" network
-//     (#UPDATE := rising edge of "M 6.7", via "FP 201.2") that now
-//     gates "Compute transfered weight.../Bottomer_Velocity",
-//     "Detect scale fault", "Platform weight sanity check" and
-//     "Overfill alarm" behind `Pump_ON OR #UPDATE` (scale-fault and
-//     platform checks previously ran every scan unconditionally -
-//     FLAGGED: confirm this is intentional, since it means those two
-//     safety checks now only evaluate when the pump is running or on an
-//     M6.7 edge, not continuously); timers T50-T54 now referenced via
-//     symbolic "Timer NN" names (T55/T56 still raw - not yet symbolized
-//     in the live project, left as-is rather than guessing a symbol
-//     that doesn't exist yet, same lesson as the RED_LED mistake).
-//   - WHT_SWL_1/2/3 -> WHT_SWL_1_Pnl/2_Pnl/3_Pnl: Michou's paste uses
-//     the _Pnl suffix for these too now (not just RED_LED/GRN_LED as
-//     the v0.24 compile log alone suggested) - adopted, DB60 updated to
-//     match.
-VERSION : 0.25
+// v0.26 changes vs v0.25 - switched every classical timer (SD/T-number)
+//   to SFB4 (IEC TON), per Michou: "Timers don't start!!! What about
+//   using SFB4 instead?" Two real things were wrong, not one:
+//   - "SD" is the mnemonic for S_ODT, the NON-retentive on-delay timer -
+//     this project's own comments (mine) wrongly called it "the stored
+//     timer" all session. The actual stored/retentive one is "SS"
+//     (S_ODTS). This alone would explain some failures (T50's settle
+//     timer, enabled by only a one-scan pulse, would reset itself the
+//     very next scan under non-retentive semantics).
+//   - SFB4/TON is call-driven, not hardware-autonomous like classical
+//     S5 timers: it only advances its elapsed time while its CALL
+//     instruction executes that scan with IN=1. A classical timer, once
+//     started, keeps counting in dedicated hardware whether or not the
+//     program revisits the starting instruction - an SFB does NOT. The
+//     old "start once in one step, check again two steps later" pattern
+//     (T53, the 5s K1 hold) would NOT work with a naive SD->CALL swap
+//     for this reason.
+//   - Fix: ONE new network, "Timers (SFB4)", computes every timer's IN
+//     condition fresh and CALLs all 7 SFB4 instances unconditionally,
+//     every single scan, regardless of which step/state is active. Each
+//     instance DB's own IN condition (not the old RLO-chain/edge tricks)
+//     now fully determines start/hold/reset - TON resets itself to 0 the
+//     instant IN goes false, so no explicit timer reset instruction is
+//     needed anywhere downstream anymore.
+//   - 7 new instance DBs (SFB4 needs one per usage - FC155 is a FUNCTION,
+//     it has no static memory of its own to hold instance data):
+//     DB106 "TON_UNDERFILL" (was T50), DB107 "TON_LAMPSCAN" (was T51,
+//     now self-oscillating via IN := Pump_ON AND NOT its own Q),
+//     DB108 "TON_RC_K2ON" (was T52), DB109 "TON_RC_K1HOLD" (was T53,
+//     IN := ReCalib_Step 2-4 inclusive, the one that most needed the
+//     "call every scan" fix), DB110 "TON_RC_K2OFF" (was T54),
+//     DB111 "TON_PWR_ON" (was T55), DB112 "TON_PWR_OFF" (was T56).
+//     DB numbers are a best guess, free within this repo's own tracked
+//     files only - not independently confirmed against the live
+//     project's full block list (same unresolved caution as T52-T56).
+//   - Downstream networks simplified: no more SD/L-preset/explicit R -
+//     just read "<instance>".Q where the old "A Tnn"/"A 'Timer nn'"
+//     checks were. Underfill's old falling-edge-latch network is gone
+//     entirely (TON_UNDERFILL's IN := NOT Pump_ON directly, continuous,
+//     no edge detection needed) - Pump_ON_Prev is no longer written by
+//     this block (DB105 field left declared, now unused, not removed).
+//     Lamp scan step's LSRS no longer needs SET;/R - LampScanClockMem is
+//     now purely mirrored from TON_LAMPSCAN.Q, which self-clears once
+//     Pump_ON goes false.
+VERSION : 0.26
 
 
 VAR_TEMP
@@ -77,6 +79,16 @@ VAR_TEMP
   INT_PART : DINT ;
   FOUND_DIGIT : BOOL ;
   UPDATE : BOOL ;
+  UNDERFILL_IN : BOOL ;
+  LAMP_IN : BOOL ;
+  RC_K2OFF_IN : BOOL ;
+  RC_GE2 : BOOL ;
+  RC_LE4 : BOOL ;
+  RC_K1HOLD_IN : BOOL ;
+  RC_K2ON_IN : BOOL ;
+  RC_IDLE : BOOL ;
+  PWRON_IN : BOOL ;
+  PWROFF_IN : BOOL ;
 END_VAR
 BEGIN
 NETWORK
@@ -102,6 +114,86 @@ TITLE =Update
       A     "M 6.7";
       FP    "FP 201.2";
       =     #UPDATE;
+
+NETWORK
+TITLE =Timers (SFB4/TON) - compute each IN condition, CALL every instance every scan
+// SFB4 is call-driven, not hardware-autonomous: it only advances while
+// its CALL executes with IN=1, and that CALL must happen every scan for
+// the whole duration being timed - see v0.26 changelog above. Every
+// timer in this block is therefore CALLed here, unconditionally, every
+// scan, with IN recomputed fresh each time - never gated inside a
+// once-per-step block downstream.
+      AN    "GLUE SCALE CONTROL DB".Pump_ON;
+      =     #UNDERFILL_IN;
+
+      CALL SFB  4 , "TON_UNDERFILL"
+           IN  := #UNDERFILL_IN,
+           PT  := T#5S;
+
+      A     "GLUE SCALE CONTROL DB".Pump_ON;
+      AN    "TON_LAMPSCAN".Q;
+      =     #LAMP_IN;
+
+      CALL SFB  4 , "TON_LAMPSCAN"
+           IN  := #LAMP_IN,
+           PT  := T#500MS;
+
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     1;
+      ==I   ;
+      =     #RC_K2OFF_IN;
+
+      CALL SFB  4 , "TON_RC_K2OFF"
+           IN  := #RC_K2OFF_IN,
+           PT  := T#3S;
+
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     2;
+      >=I   ;
+      =     #RC_GE2;
+
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     4;
+      <=I   ;
+      =     #RC_LE4;
+
+      A     #RC_GE2;
+      A     #RC_LE4;
+      =     #RC_K1HOLD_IN;
+
+      CALL SFB  4 , "TON_RC_K1HOLD"
+           IN  := #RC_K1HOLD_IN,
+           PT  := T#5S;
+
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     3;
+      ==I   ;
+      =     #RC_K2ON_IN;
+
+      CALL SFB  4 , "TON_RC_K2ON"
+           IN  := #RC_K2ON_IN,
+           PT  := T#500MS;
+
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     0;
+      ==I   ;
+      =     #RC_IDLE;
+
+      A     "GLUE SCALE CONTROL DB".Scale_PowerON_Pulse;
+      A     #RC_IDLE;
+      =     #PWRON_IN;
+
+      CALL SFB  4 , "TON_PWR_ON"
+           IN  := #PWRON_IN,
+           PT  := T#500MS;
+
+      A     "GLUE SCALE CONTROL DB".Scale_PowerOFF_Pulse;
+      A     #RC_IDLE;
+      =     #PWROFF_IN;
+
+      CALL SFB  4 , "TON_PWR_OFF"
+           IN  := #PWROFF_IN,
+           PT  := T#3S;
 
 NETWORK
 TITLE =Compute transfered weight and mirror bottomer velocity to HMI DB
@@ -228,11 +320,8 @@ TITLE =Store final weight - Byte_8's decimal digit is discarded, INT resolution 
 NETWORK
 TITLE =Detect scale fault - GrossWeight_Actual matches the scale's negative-value sentinel (latching)
 // Confirmed by Michou: -20663 is the real INT value the KWS CY300
-// gives when its reading goes negative. Runs on the already-stored
-// INT GrossWeight_Actual - -20663 fits fine in 16-bit INT range.
-// FLAGGED (v0.25): now gated on #UPDATE (M6.7 edge) only, not every
-// scan unconditionally as before - confirm this is intentional for a
-// fault check.
+// gives when its reading goes negative. FLAGGED (v0.25): gated on
+// #UPDATE only, not every scan unconditionally - confirm intentional.
       O     #UPDATE;
       JCN   UDT1;
 
@@ -245,11 +334,8 @@ UDT1: NOP   0;
 
 NETWORK
 TITLE =Platform weight sanity check - GrossWeight_Actual must exceed the empty platform's own dead weight
-// The platform itself (nothing on it) weighs at least PlatformMinWeight_SP
-// (30kg) - a GROSS reading below that is implausible and means the
-// reading can't be trusted, not a real underfill. Same alarm bit as the
-// sentinel check above. FLAGGED (v0.25): now gated on Pump_ON OR
-// #UPDATE, not every scan - confirm intentional.
+// FLAGGED (v0.25): gated on Pump_ON OR #UPDATE, not every scan -
+// confirm intentional.
       A     "GLUE SCALE CONTROL DB".Pump_ON;
       O     #UPDATE;
       JCN   UDT2;
@@ -308,7 +394,7 @@ NXT1: NOP   0;
 
 NETWORK
 TITLE =Overfill alarm - latching, set on exceed, no auto-reset here
-// FLAGGED (v0.25): now gated on Pump_ON OR #UPDATE, not every scan -
+// FLAGGED (v0.25): gated on Pump_ON OR #UPDATE, not every scan -
 // confirm intentional.
       A     "GLUE SCALE CONTROL DB".Pump_ON;
       O     #UPDATE;
@@ -322,20 +408,12 @@ TITLE =Overfill alarm - latching, set on exceed, no auto-reset here
 NPMP: NOP   0;
 
 NETWORK
-TITLE =Underfill check - start 5s settle timer on pump-off (falling edge)
-
-      A     "GLUE SCALE CONTROL DB".Pump_ON_Prev;
-      AN    "GLUE SCALE CONTROL DB".Pump_ON;
-      L     S5T#5S;
-      SD    "Timer 50";
-
-      A     "GLUE SCALE CONTROL DB".Pump_ON;
-      =     "GLUE SCALE CONTROL DB".Pump_ON_Prev;
-
-NETWORK
-TITLE =Underfill alarm - latch if weight still below limit after T50
-
-      A     "Timer 50";
+TITLE =Underfill alarm - latch if weight still below limit after settling (SFB4 TON_UNDERFILL)
+// TON_UNDERFILL's IN is fed from NOT Pump_ON directly (see "Timers"
+// network above) - no falling-edge latch needed, TON handles start and
+// auto-reset on its own. Pump_ON_Prev is no longer written here
+// (DB105 field left declared, unused).
+      A     "TON_UNDERFILL".Q;
       JCN   SKPU;
 
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
@@ -380,21 +458,15 @@ TITLE =Drive physical glue pump output - automatic Pump_ON, Glue_Fill_Pump_Test 
       =     "HMI DB".Glue_Fill_Pump_ON;
 
 NETWORK
-TITLE =Lamp scan clock - one-scan pulse every 500ms while Pump_ON (standard SD-timer flasher idiom)
-// LampScanClockMem toggles high for exactly one scan every 500ms as
-// long as Pump_ON stays true: SD T51 only (re)starts on a rising edge
-// of its own enable rung; while LampScanClockMem is FALSE the rung
-// stays enabled and the stored timer counts down untouched by repeat
-// calls, then on elapse T51.Q goes TRUE, LampScanClockMem latches TRUE
-// for that one scan and T51 is immediately reset. Not bench-verified.
-      A     "GLUE SCALE CONTROL DB".Pump_ON;
-      AN    "GLUE SCALE CONTROL DB".LampScanClockMem;
-      L     S5T#500MS;
-      SD    "Timer 51";
-
-      A     "Timer 51";
+TITLE =Lamp scan clock - mirrors TON_LAMPSCAN's self-oscillating 500ms pulse
+// TON_LAMPSCAN's IN (Pump_ON AND NOT its own Q, computed in "Timers"
+// above) makes it free-running: once elapsed, Q=1 for one scan, which
+// immediately makes IN false next scan, auto-resetting Q/ET to 0, which
+// makes IN true again the scan after - repeating every 500ms while
+// Pump_ON stays true. Not bench-verified - confirm the timing on real
+// hardware.
+      A     "TON_LAMPSCAN".Q;
       =     "GLUE SCALE CONTROL DB".LampScanClockMem;
-      R     "Timer 51";
 
 NETWORK
 TITLE =Lamp scan step - advances 1->2->3->1 on each clock pulse, resets to 1 when the pump stops
@@ -419,12 +491,8 @@ LSIN: L     "GLUE SCALE CONTROL DB".LampScanStep;
       T     "GLUE SCALE CONTROL DB".LampScanStep;
       JU    LSDN;
 
-LSRS: SET   ;
-      L     1;
+LSRS: L     1;
       T     "GLUE SCALE CONTROL DB".LampScanStep;
-      R     "Timer 51";
-      CLR   ;
-      =     "GLUE SCALE CONTROL DB".LampScanClockMem;
 
 LSDN: NOP   0;
 
@@ -467,24 +535,21 @@ WSCN: L     "GLUE SCALE CONTROL DB".LampScanStep;
 WLDN: NOP   0;
 
 NETWORK
-TITLE =Power-on + calibrate sequence - powers the scale off first, then K1 on for a flat 5s, K2 pulsed 0.5s inside that window
+TITLE =Power-on + calibrate sequence - powers the scale off first, then K1 on for a flat 5s, K2 pulsed 0.5s inside that window (SFB4)
 // KWS CY300 power-up defect workaround: the scale resets its zero/
 // calibration reference every power-up. Closing the calibration shunt
 // (K1) BEFORE power-cycling the scale (K2) means the scale sees the
 // known shunt reference the moment it boots. K2 is a momentary
 // button-press simulation - a SHORT 0.5s pulse powers the scale ON, a
 // LONG 3s pulse powers it OFF. Recalibrating needs a full power cycle,
-// so step 1 pulses K2 for 3s (power OFF, reusing T54) before K1
-// engages and the power-on+calibrate cycle runs.
-//   ReCalib_Step: 0 idle, 1 K2 3s power-off pulse (T54), 2 K1 on/T53
-//   (5s hold) started, 3 K2 0.5s power-on pulse (T52), 4 waiting for
-//   T53 to elapse, 5 K1 off/done.
-// v0.25: added SET; before the S/SD/R coil at the start of RCS1/RCS2/
-// RCS3/RCS5 (each reached via a JC jump, which can't be trusted to
-// leave RLO=1 - same reasoning as TRXF/CLOS/WTON above). Likely fix for
-// Michou's "ReCalib_Step stuck at 3" report, not fully confirmed - if
-// it still sticks, check whether Timer 52 is used elsewhere in the live
-// project.
+// so step 1 pulses K2 for 3s (power OFF) before K1 engages.
+//   ReCalib_Step: 0 idle, 1 K2 3s power-off pulse (TON_RC_K2OFF), 2 K1
+//   on (TON_RC_K1HOLD's 5s window starts), 3 K2 0.5s power-on pulse
+//   (TON_RC_K2ON), 4 waiting for TON_RC_K1HOLD to elapse, 5 K1
+//   off/done. All three timers are CALLed every scan in the "Timers"
+//   network above, not here - this network only reads their .Q and
+//   drives K1/K2 via S/R (SET; before each, reached via a jump that
+//   can't be trusted to leave RLO=1 on its own).
       A     "GLUE SCALE CONTROL DB".Scale_ReCalib_Req;
       FP    "FP 201.1";
       JCN   RCST;
@@ -525,39 +590,31 @@ RCST: L     "GLUE SCALE CONTROL DB".ReCalib_Step;
 
 RCS1: SET   ;
       S     "OUTPUTS DB".KILOTECK_Power_K2; // Power Off
-      L     S5T#3S;
-      SD    "Timer 54";
 
-      A     "Timer 54";
+      A     "TON_RC_K2OFF".Q;
       JCN   RCDN;
       R     "OUTPUTS DB".KILOTECK_Power_K2;
-      R     "Timer 54";
       L     2;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
       JU    RCDN;
 
 RCS2: SET   ;
       S     "OUTPUTS DB".KILOTECK_Calib_K1;
-      L     S5T#5S;
-      SD    "Timer 53";
       L     3;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
       JU    RCDN;
 
 RCS3: SET   ;
       S     "OUTPUTS DB".KILOTECK_Power_K2;
-      L     S5T#500MS;
-      SD    "Timer 52";
 
-      A     "Timer 52";
+      A     "TON_RC_K2ON".Q;
       JCN   RCDN;
       R     "OUTPUTS DB".KILOTECK_Power_K2;
-      R     "Timer 52";
       L     4;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
       JU    RCDN;
 
-RCS4: A     "Timer 53";
+RCS4: A     "TON_RC_K1HOLD".Q;
       JCN   RCDN;
       L     5;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
@@ -565,19 +622,16 @@ RCS4: A     "Timer 53";
 
 RCS5: SET   ;
       R     "OUTPUTS DB".KILOTECK_Calib_K1;
-      R     "Timer 53";
       L     0;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
 
 RCDN: NOP   0;
 
 NETWORK
-TITLE =Manual power-off pulse - 3s K2 pulse on Scale_PowerOFF_Pulse, auto-clears when done
-// No step counter needed for a single timed action. Calling SD
-// directly off this bit's own level is safe without separate edge
-// memory: SD only truly (re)starts on a rising edge of its enable rung.
-// Ignored while ReCalib_Step is mid-sequence. Auto-clears
-// Scale_PowerOFF_Pulse when the pulse completes.
+TITLE =Manual power-off pulse - 3s K2 pulse on Scale_PowerOFF_Pulse, auto-clears when done (SFB4 TON_PWR_OFF)
+// TON_PWR_OFF's IN (Scale_PowerOFF_Pulse AND ReCalib_Step=0) is
+// computed and CALLed every scan in "Timers" above - this network just
+// drives K2 and reads .Q.
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     0;
       <>I   ;
@@ -586,22 +640,20 @@ TITLE =Manual power-off pulse - 3s K2 pulse on Scale_PowerOFF_Pulse, auto-clears
       A     "GLUE SCALE CONTROL DB".Scale_PowerOFF_Pulse;
       JCN   PFDN;
 
+      SET   ;
       S     "OUTPUTS DB".KILOTECK_Power_K2;
-      L     S5T#3S;
-      SD    T     56;
-      A     T     56;
+
+      A     "TON_PWR_OFF".Q;
       JCN   PFDN;
       R     "OUTPUTS DB".KILOTECK_Power_K2;
-      R     T     56;
       CLR   ;
       =     "GLUE SCALE CONTROL DB".Scale_PowerOFF_Pulse;
 
 PFDN: NOP   0;
 
 NETWORK
-TITLE =Manual power-on pulse - 500ms K2 pulse on Scale_PowerON_Pulse, auto-clears when done
-// Same idiom as the power-off pulse above, short pulse instead of long.
-// Ignored while ReCalib_Step is mid-sequence.
+TITLE =Manual power-on pulse - 500ms K2 pulse on Scale_PowerON_Pulse, auto-clears when done (SFB4 TON_PWR_ON)
+
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     0;
       <>I   ;
@@ -610,13 +662,12 @@ TITLE =Manual power-on pulse - 500ms K2 pulse on Scale_PowerON_Pulse, auto-clear
       A     "GLUE SCALE CONTROL DB".Scale_PowerON_Pulse;
       JCN   PNDN;
 
+      SET   ;
       S     "OUTPUTS DB".KILOTECK_Power_K2;
-      L     S5T#500MS;
-      SD    T     55;
-      A     T     55;
+
+      A     "TON_PWR_ON".Q;
       JCN   PNDN;
       R     "OUTPUTS DB".KILOTECK_Power_K2;
-      R     T     55;
       CLR   ;
       =     "GLUE SCALE CONTROL DB".Scale_PowerON_Pulse;
 

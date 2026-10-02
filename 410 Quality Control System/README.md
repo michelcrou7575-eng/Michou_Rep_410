@@ -33,6 +33,28 @@ it isn't rediscovered the same way again:
   to value 3 and stuck") — fixed in v0.25. A plain `A`/`O`/etc. bit-logic
   instruction right after a label doesn't have this problem — it loads
   fresh regardless of what RLO was before the jump.
+- **`SD` is the NON-retentive on-delay timer mnemonic (`S_ODT`), not the
+  stored one** — a mistake repeated throughout this project's comments
+  all session ("the stored timer counts down untouched by repeat calls"
+  is wrong). The actual retentive/stored on-delay is `SS` (`S_ODTS`).
+  `SD`'s count resets to 0 the instant its enable input goes false, so a
+  timer meant to keep running after only a one-scan trigger (like the
+  old underfill settle timer) silently never reaches its preset.
+- **This project now uses SFB4 (IEC `TON`) instead of classical S5
+  timers** (v0.26, per Michou: "Timers don't start!!! What about using
+  SFB4 instead?"). Critical difference from classical timers: **SFB4 is
+  call-driven, not hardware-autonomous.** A classical S5 timer, once
+  started, keeps counting in dedicated CPU hardware whether or not the
+  program revisits the starting instruction on later scans. An SFB does
+  NOT — it only advances its elapsed time while its own `CALL`
+  instruction actually executes that scan with `IN=1`. A "start once in
+  one step, check the result two steps later" pattern (the old T53, the
+  5s K1 hold) silently stalls forever with a naive SD-to-CALL swap,
+  because the SFB is simply never called again once the state machine
+  moves to a different step. Fix: one consolidated network computes
+  every timer's `IN` condition and `CALL`s all 7 SFB4 instances
+  **unconditionally, every single scan**, regardless of which step is
+  currently active — see "Power-up calibration workaround" below.
 
 ## Hardware / signal chain
 
@@ -84,8 +106,10 @@ acting on a bad telegram.
   `GrossWeight_Actual_Mem` — see "Transfered weight" below. Mirrored onto the
   real actuator bit, `"HMI DB".Glue_Fill_Pump_ON` — see HMI bridge section.
 - **Alarm_Overfill**: latching, sets if `GrossWeight_Actual > AlarmLimit_Overfill_SP`.
-- **Alarm_Underfill**: 5 seconds after Pump_ON falls (timer T50), checks
-  `GrossWeight_Actual < AlarmLimit_Underfill_SP` once at that instant; latching.
+- **Alarm_Underfill**: 5 seconds after Pump_ON falls (`"TON_UNDERFILL"`
+  SFB4 instance, DB106 — `IN` fed directly from `NOT Pump_ON`, no
+  edge-latch needed), checks `GrossWeight_Actual < AlarmLimit_Underfill_SP`
+  continuously from that point on while the pump stays off; latching.
 - **Alarm_ScaleFault**: latching, sets if either:
   - `GrossWeight_Actual` matches `NegativeUnderScore_Value` (INT, -20663)
     — confirmed by Michou: the real INT value the KWS CY300 gives when
@@ -141,10 +165,10 @@ free-running or reset-driven total.
 - **WHT_SWL_1/2/3 scan pattern**: while `Pump_ON` is true (and Test is not
   active), these three lamps cycle 1→2→3→1… as a running-light "pump active"
   indicator. Driven by a 500ms one-scan-pulse flasher (`LampScanClockMem`,
-  timer T51 — confirm unused elsewhere in the 410 project, same caution
-  already flagged for T50) advancing `LampScanStep` (1/2/3, resets to 1 when
-  the pump stops). **Not bench-verified** — the flasher is a standard S7 STL
-  idiom, traced through by hand, but hasn't been confirmed on real hardware.
+  mirrored from `"TON_LAMPSCAN"`, DB107 — self-oscillating: its `IN` is fed
+  from `Pump_ON AND NOT its own Q`, so it free-runs every 500ms on its own)
+  advancing `LampScanStep` (1/2/3, resets to 1 when the pump stops).
+  **Not bench-verified** — hand-traced, not confirmed on real hardware.
 - **RED_LED**: on if `Alarm_Overfill` OR `Alarm_Underfill` OR
   `Alarm_ScaleFault` is latched. **GRN_LED**: on if none are. (Michou's spec
   named only Overfill/Underfill for RED and "no alarm" for GRN —
@@ -208,34 +232,42 @@ Michou (2026-10-02), a **short 0.5s pulse powers the scale ON**, a
 
 FC155 runs three independent sequences, with sequencing state in DB105
 ("GLUE SCALE CONTROL DB" — this subsystem's own state, not the shared
-output DB):
+output DB) and timing via **SFB4 (IEC `TON`) instance DBs**, not
+classical S5 timers (see "S7-300 STL hard limits" above for why):
 
 - **Power-on + calibrate** (`Scale_ReCalib_Req` rising edge, ignored
   while already running): recalibrating needs a full power cycle, not
   just toggling K1 while the scale is already running — so this first
-  pulses K2 for 3s to power the scale OFF (`ReCalib_Step` 1, reusing
-  the same T54 timer as the standalone power-off pulse below), then
-  energizes K1, holds it on for a flat 5s (`ReCalib_Step` 2→5), pulsing
-  K2 on for 0.5s inside that same window to power the scale back up
-  while the calibration shunt is already connected — the scale sees the
-  known shunt reference the moment it boots. K1 releases when the 5s
-  elapses. The only one of the three with multi-step state
-  (`ReCalib_Step`); edge-detected via raw symbol `"FP 201.1"`.
+  pulses K2 for 3s to power the scale OFF (`ReCalib_Step` 1,
+  `"TON_RC_K2OFF"` / DB110), then energizes K1, holds it on for a flat
+  5s (`ReCalib_Step` 2→5, `"TON_RC_K1HOLD"` / DB109), pulsing K2 on for
+  0.5s inside that same window (`"TON_RC_K2ON"` / DB108) to power the
+  scale back up while the calibration shunt is already connected — the
+  scale sees the known shunt reference the moment it boots. K1 releases
+  when the 5s elapses. The only one of the three with multi-step state
+  (`ReCalib_Step`); the *start* edge is detected via raw symbol
+  `"FP 201.1"`, but once running, each timer's `IN` is recomputed and
+  `CALL`ed every scan regardless of which step is active (see "Timers
+  (SFB4)" network) — this is the part a classical-timer "fire once,
+  check back later" design can't do.
 - **Manual power-off pulse** (`Scale_PowerOFF_Pulse`, ignored while
-  `ReCalib_Step` is mid-sequence): a single 3s K2 pulse (T56), no K1
-  involved. No step counter — gated directly on the bit's own level
-  (safe without separate edge memory, since the timer only truly
-  restarts on a rising edge); auto-clears the bit when the pulse
+  `ReCalib_Step` is mid-sequence): a single 3s K2 pulse
+  (`"TON_PWR_OFF"` / DB112), no K1 involved. No step counter — gated
+  directly on the bit's own level; auto-clears the bit when the pulse
   completes.
 - **Manual power-on pulse** (`Scale_PowerON_Pulse`, same guard/idiom):
-  a single 500ms K2 pulse (T55), auto-clears when done.
+  a single 500ms K2 pulse (`"TON_PWR_ON"` / DB111), auto-clears when
+  done.
 
 Each sequence guards against starting while another is mid-run, so
 K1/K2 are never driven by more than one action in the same scan.
-Timers: T52 (0.5s power-on pulse inside ReCalib), T53 (5s K1 hold), T54
-(3s power-off pulse inside ReCalib), T55 (standalone 500ms power-on
-pulse), T56 (standalone 3s power-off pulse) — confirmed unused
-elsewhere in the 410 project, same check as T50/T51.
+`"TON_LAMPSCAN"` (DB107) and `"TON_UNDERFILL"` (DB106) are the other
+two SFB4 instances, covering the lamp-scan flasher and the underfill
+settle timer respectively — see "Manual test and indicator lamps" and
+the underfill alarm in "Control logic" above. DB numbers 106-112 are a
+best guess, free within this repo's own tracked files only — **not
+independently confirmed against the live project's full block list**,
+same unresolved caution as the classical timer numbers before them.
 
 **Still open / flagged for confirmation**:
 - None of `Scale_ReCalib_Req`/`Scale_PowerOFF_Pulse`/`Scale_PowerON_Pulse`
@@ -244,15 +276,13 @@ elsewhere in the 410 project, same check as T50/T51.
   (`RED_LED_Pnl`/`GRN_LED_Pnl` by a real compile error; `WHT_SWL_1/2/3_Pnl`
   by Michou's next working online version using them) — FC155 v0.25,
   DB60 v0.3.
-- **"ReCalib_Step stuck at 3" (2026-10-02)**: fixed in FC155 v0.25 by
-  adding `SET;` before the `S`/`SD`/`R` coil at the start of
-  `RCS1`/`RCS2`/`RCS3`/`RCS5` (each reached via a jump, which can't be
-  trusted to leave RLO=1 — see "S7-300 STL hard limits" above). Not
-  100% certain this was the actual cause — if steps still stick after
-  this fix, the next suspect is **Timer 52 colliding with something
-  elsewhere in the live project** this repo can't see (the T50/T51
-  collision caution never got fully closed out, and the same applies to
-  T52-T56).
+- The SFB4 migration (v0.26) is a from-scratch design, not yet bench
+  verified on real hardware — confirm each timer's behavior (especially
+  the self-oscillating lamp-scan flasher and the 5s K1 hold, the two
+  most structurally different from before) before trusting it in
+  production.
+- DB106-DB112 need confirming as genuinely free block numbers on the
+  live PLC before download — this repo can't see the whole project.
 - The "Update" network (`#UPDATE` := rising edge of `"M 6.7"`) now gates
   "Detect scale fault" and "Overfill alarm" (and "Platform weight sanity
   check" together with `Pump_ON`) behind `Pump_ON OR #UPDATE` instead of
@@ -264,19 +294,26 @@ elsewhere in the 410 project, same check as T50/T51.
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.25. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.26. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), pump control with
   overfill/underfill interlock, platform-weight sanity check + scale-fault
   pump interlock, alarm latching and reset, HMI DB bridge (setpoints, live
   weight, transfered-weight calc, bottomer-velocity mirror, the real pump
   output), lamp outputs (scan pattern + alarm lamps), and the KWS CY300
   power-up calibration / power-off relay sequences (folded in from a
-  short-lived separate FC156). Originated as a STEP7 export of the live
-  PLC's actual block — logic was identical to the now-deleted
-  FC104_GLUE_SCALE.awl v0.13 at that point; FC104 was compiled, deployed,
-  then renumbered FC104->FC155 and renamed "GLUE_SCALE" -> "GLUE SCALE
-  LOGIC" on the real PLC project. Repeatedly reconciled against Michou's
-  own parallel online rebuilds (v0.18/v0.19, v0.21).
+  short-lived separate FC156), all timing via SFB4 instance DBs (see
+  below). Originated as a STEP7 export of the live PLC's actual block —
+  logic was identical to the now-deleted FC104_GLUE_SCALE.awl v0.13 at
+  that point; FC104 was compiled, deployed, then renumbered FC104->FC155
+  and renamed "GLUE_SCALE" -> "GLUE SCALE LOGIC" on the real PLC project.
+  Repeatedly reconciled against Michou's own parallel online rebuilds.
+- `DB106_TON_UNDERFILL.awl` through `DB112_TON_PWR_OFF.awl` — 7 SFB4
+  (IEC `TON`, on-delay timer) instance DBs, one per timer FC155 uses
+  (underfill settle, lamp-scan flasher, and the 5 power-sequence
+  timers). Each is a minimal instance DB (`SFB 4`, no declared
+  STRUCT — its interface comes from SFB4 itself). See "Power-up
+  calibration workaround" above and "S7-300 STL hard limits" at top for
+  why these replaced classical S5 timers (T50-T56).
 - `DB4_ABC3000A_DB.awl` — 20-byte raw telegram buffer, filled by SFC14.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
   limits, scale-fault sentinel, platform-weight sanity limit, pump/alarm
@@ -304,10 +341,13 @@ elsewhere in the 410 project, same check as T50/T51.
 
 - HMI button/screen wiring to pulse `Reset_Alarms` — the PLC-side reset
   logic exists, nothing drives the bit yet.
-- The lamp-scan flasher (`LampScanClockMem`/`LampScanStep`, T51) is
-  hand-traced but not bench-verified — confirm the 500ms period and
+- The lamp-scan flasher (`LampScanClockMem`/`LampScanStep`, `"TON_LAMPSCAN"`)
+  is hand-traced but not bench-verified — confirm the 500ms period and
   on/off behavior on real hardware.
-- Confirm T50 and T51 aren't used elsewhere in the 410 project.
+- Confirm DB106-DB112 (the new SFB4 instance DBs) are genuinely free
+  block numbers on the live PLC — this repo can't see the whole
+  project, same unresolved caution the classical timer numbers (T50-T56,
+  now retired) never got fully closed out on either.
 - `Hysteresis`, `SpareReal2`, `Spare_INT`, `Scale_Powered_On`,
   `Actual_Transfered_Weight` (the DB105 copy) and `Spare_11..Spare_15`
   exist in DB105 but aren't wired to anything in FC155 yet — no

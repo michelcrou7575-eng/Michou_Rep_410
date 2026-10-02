@@ -1,0 +1,10 @@
+DATA_BLOCK "TON_LAMPSCAN"
+SFB      4
+// v0.1 - NEW instance DB for SFB4 (IEC TON), replacing classical timer
+// T51 (lamp scan clock, 500ms free-running pulse). See
+// DB106_TON_UNDERFILL.awl's header for the full reasoning; see FC155
+// v0.26 for how this one specifically self-oscillates (IN fed from
+// Pump_ON AND NOT this DB's own Q - a standard TON self-reset flasher
+// idiom).
+BEGIN
+END_DATA_BLOCK

@@ -1,0 +1,9 @@
+DATA_BLOCK "TON_RC_K2OFF"
+SFB      4
+// v0.1 - NEW instance DB for SFB4 (IEC TON), replacing classical timer
+// T54 (ReCalib_Step 1 - KILOTECK_Power_K2 3s power-off pulse, the first
+// step of the power-on+calibrate sequence). See DB106_TON_UNDERFILL.awl's
+// header for the full reasoning. IN fed from "ReCalib_Step = 1", called
+// every scan - see FC155 v0.26.
+BEGIN
+END_DATA_BLOCK
