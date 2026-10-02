@@ -178,33 +178,40 @@ K2 is a momentary button-press simulation, not a plain on/off: per
 Michou (2026-10-02), a **short 0.5s pulse powers the scale ON**, a
 **long 3s pulse powers it OFF**.
 
-FC155 runs two independent sequences, with sequencing state in DB105
+FC155 runs three independent sequences, with sequencing state in DB105
 ("GLUE SCALE CONTROL DB" — this subsystem's own state, not the shared
 output DB):
 
 - **Power-on + calibrate** (`Scale_ReCalib_Req` rising edge, ignored
-  while a power-off is mid-sequence): recalibrating needs a full power
-  cycle, not just toggling K1 while the scale is already running — so
-  this first pulses K2 for 3s to power the scale OFF (`ReCalib_Step`
-  1, reusing the same T54 timer as the standalone power-off sequence
-  below), then energizes K1, holds it on for a flat 5s (`ReCalib_Step`
-  2→5), pulsing K2 on for 0.5s inside that same window to power the
-  scale back up while the calibration shunt is already connected — the
-  scale sees the known shunt reference the moment it boots. K1 releases
-  when the 5s elapses.
-- **Power-off** (`Scale_PowerOff_Req` rising edge, ignored while a
-  power-on/calibrate is mid-sequence): just a 3s K2 pulse
-  (`PowerOff_Step` 1→0), no K1 involved.
+  while already running): recalibrating needs a full power cycle, not
+  just toggling K1 while the scale is already running — so this first
+  pulses K2 for 3s to power the scale OFF (`ReCalib_Step` 1, reusing
+  the same T54 timer as the standalone power-off pulse below), then
+  energizes K1, holds it on for a flat 5s (`ReCalib_Step` 2→5), pulsing
+  K2 on for 0.5s inside that same window to power the scale back up
+  while the calibration shunt is already connected — the scale sees the
+  known shunt reference the moment it boots. K1 releases when the 5s
+  elapses. The only one of the three with multi-step state
+  (`ReCalib_Step`); edge-detected via raw symbol `"FP 201.1"`.
+- **Manual power-off pulse** (`Scale_PowerOFF_Pulse`, ignored while
+  `ReCalib_Step` is mid-sequence): a single 3s K2 pulse (T56), no K1
+  involved. No step counter — gated directly on the bit's own level
+  (safe without separate edge memory, since the timer only truly
+  restarts on a rising edge); auto-clears the bit when the pulse
+  completes.
+- **Manual power-on pulse** (`Scale_PowerON_Pulse`, same guard/idiom):
+  a single 500ms K2 pulse (T55), auto-clears when done.
 
-Each sequence guards against starting while the other is running, so
-K1/K2 are never driven by both in the same scan. Timers: T52 (0.5s
-power-on pulse), T53 (5s K1 hold), T54 (3s power-off pulse, shared by
-both sequences) — confirmed unused elsewhere in the 410 project, same
-check as T50/T51.
+Each sequence guards against starting while another is mid-run, so
+K1/K2 are never driven by more than one action in the same scan.
+Timers: T52 (0.5s power-on pulse inside ReCalib), T53 (5s K1 hold), T54
+(3s power-off pulse inside ReCalib), T55 (standalone 500ms power-on
+pulse), T56 (standalone 3s power-off pulse) — confirmed unused
+elsewhere in the 410 project, same check as T50/T51.
 
 **Still open / flagged for confirmation**:
-- Nothing calls this sequence's `Scale_ReCalib_Req`/`Scale_PowerOff_Req`
-  triggers yet — not wired to HMI buttons.
+- None of `Scale_ReCalib_Req`/`Scale_PowerOFF_Pulse`/`Scale_PowerON_Pulse`
+  are wired to HMI buttons yet.
 - Michou's own online FC155 rebuild (2026-10-02) references
   `"OUTPUTS DB".WHT_SWL_1_Pnl`/`WHT_SWL_2_Pnl`/`WHT_SWL_3_Pnl`/
   `RED_LED_Pnl`/`GRN_LED_Pnl` (a `_Pnl` suffix) instead of the plain
@@ -216,7 +223,7 @@ check as T50/T51.
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.22. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.23. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), pump control with
   overfill/underfill interlock, platform-weight sanity check + scale-fault
   pump interlock, alarm latching and reset, HMI DB bridge (setpoints, live
@@ -233,7 +240,7 @@ check as T50/T51.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
   limits, scale-fault sentinel, platform-weight sanity limit, pump/alarm
   output bits, alarm reset, lamp scan state, power-on/power-off
-  sequencing state. Version 0.13. Symbol is `"GLUE SCALE CONTROL DB"`
+  sequencing state. Version 0.14. Symbol is `"GLUE SCALE CONTROL DB"`
   (spaces) to match what FC155 actually references.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.
@@ -260,14 +267,15 @@ check as T50/T51.
   hand-traced but not bench-verified — confirm the 500ms period and
   on/off behavior on real hardware.
 - Confirm T50 and T51 aren't used elsewhere in the 410 project.
-- `Hysteresis`, `SpareReal1`/`SpareReal2`, `Scale_Powered_On`,
-  `Actual_Transfered_Weight` (the DB105 copy), `Scale_PowerON_Pulse` and
-  `Spare_11..Spare_15` exist in DB105 but aren't wired to anything in
-  FC155 yet — no confirmed intended behavior for any of them.
+- `Hysteresis`, `SpareReal2`, `Spare_INT`, `Scale_Powered_On`,
+  `Actual_Transfered_Weight` (the DB105 copy) and `Spare_11..Spare_15`
+  exist in DB105 but aren't wired to anything in FC155 yet — no
+  confirmed intended behavior for any of them.
 - The touch panel's own screen project needs its tags re-pointed to
   match `"HMI DB"` v0.3's restructured offsets — outside this repo, can't
   be done from here.
-- `Scale_ReCalib_Req`/`Scale_PowerOff_Req` triggers aren't wired to HMI
+- None of the three power-sequence triggers (`Scale_ReCalib_Req`,
+  `Scale_PowerOFF_Pulse`, `Scale_PowerON_Pulse`) are wired to HMI
   buttons yet.
 - `PlatformMinWeight_SP` (30kg) is a best-guess default from Michou's
   "Platform free weight" description — confirm against the actual empty

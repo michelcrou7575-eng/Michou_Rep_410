@@ -212,7 +212,29 @@ TITLE =Glue Scale Weight Control and Alarms  DB105
 //   name, so the declared order here doesn't need to match the live
 //   compiled offsets for correctness, only the field names need to
 //   agree, which they do.
-VERSION : 0.13
+//
+// v0.14 changes vs v0.13 - Michou refactored this struct directly online
+//   (2026-10-02: "New DATA_BLOCK 'GLUE SCALE CONTROL DB'!") - reconciled
+//   here (see FC155 v0.23 for the corresponding logic changes):
+//   - PlatformMinWeight_SP moved later in the struct (now right after
+//     ReCalib_Step) and gained an inline struct-level default (`: INT :=
+//     30`) in addition to its BEGIN-block initializer - purely cosmetic,
+//     no behavior change, both still resolve to 30.
+//   - REMOVED PowerOff_Step, ReCalib_ReqMem, Scale_PowerOff_Req,
+//     PowerOff_ReqMem - the standalone power-off sequence no longer
+//     needs a step counter for a single timed action; see FC155 v0.23.
+//   - RENAMED/NEW: Scale_PowerOff_Req -> Scale_PowerOFF_Pulse (same
+//     role, standalone power-off trigger, simplified). NEW
+//     Scale_PowerON_Pulse - a standalone power-on-only trigger that
+//     didn't exist before (previously power-on only ever happened as
+//     part of the full ReCalib sequence).
+//   - SpareReal1 dropped (only SpareReal2 remains); NEW generic
+//     Spare_INT : INT.
+//   - GrossWeight_Actual's initial value is -20663 again (was reset to 0
+//     in v0.10) - appears to be a deliberate choice on Michou's part
+//     (same value he's used before as a known-fault test state), kept
+//     as-is rather than reset again.
+VERSION : 0.14
 
  STRUCT 	
    GrossWeight_Actual : INT ;	//Parsed live weight from KWS CY300 scale (kg) - whole kg, scale's decimal digit 

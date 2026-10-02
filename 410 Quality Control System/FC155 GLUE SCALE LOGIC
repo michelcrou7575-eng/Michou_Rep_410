@@ -261,7 +261,35 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms FC155
 //   live one closely enough byte-for-byte to try forcing those exact
 //   offsets without a full DB105 re-export - see that block's own v0.13
 //   changelog).
-VERSION : 0.22
+//
+// v0.23 changes vs v0.22 - Michou directly refactored DB105's struct
+//   online (DB105 v0.14, 2026-10-02: "New DATA_BLOCK 'GLUE SCALE CONTROL
+//   DB'!"), removing several fields this block's power sequences
+//   depended on (ReCalib_ReqMem, PowerOff_Step, Scale_PowerOff_Req,
+//   PowerOff_ReqMem) and replacing the standalone power-off trigger with
+//   a simpler single bool, Scale_PowerOFF_Pulse, plus a new standalone
+//   Scale_PowerON_Pulse that didn't exist before - FC155 updated to
+//   match:
+//   - "Power-on + calibrate sequence"'s edge memory moves from the now-
+//     deleted ReCalib_ReqMem DB field to raw symbol "FP 201.1" - the
+//     same address Michou's own earlier online rebuild already used for
+//     this exact purpose (see v0.18 changelog), and consistent with
+//     this file's pre-existing "FP 200.6" raw-edge-memory precedent in
+//     the pump-control network.
+//   - "Power-off sequence" (step-counter based) replaced by "Manual
+//     power-off pulse" - a single SD-timer action gated directly on
+//     Scale_PowerOFF_Pulse's own level (no separate edge memory needed:
+//     SD only truly restarts on a rising edge of its enable rung, per
+//     this file's own established idiom - see the Lamp scan clock
+//     network). Auto-clears Scale_PowerOFF_Pulse when the pulse
+//     completes. Still reuses T54 inside the ReCalib sequence itself
+//     (step 1) but now uses its own T56 for this standalone action,
+//     since the two can no longer easily share one timer the way the
+//     old step-counter design did.
+//   - NEW "Manual power-on pulse" network, same idiom, T55, 500ms -
+//     DB105's new Scale_PowerON_Pulse field had nothing driving it
+//     before this.
+VERSION : 0.23
 
 
 VAR_TEMP
@@ -650,22 +678,22 @@ TITLE =Power-on + calibrate sequence - powers the scale off first, then K1 on fo
 // recalib" - recalibrating needs a full power cycle, not just toggling
 // K1 while the scale is already running, so step 1 below pulses K2 for
 // 3s (power OFF, reusing the same T54 timer as the standalone
-// power-off sequence) before K1 engages and the power-on+calibrate
+// power-off pulse below) before K1 engages and the power-on+calibrate
 // cycle runs.
 //   ReCalib_Step: 0 idle, 1 K2 3s power-off pulse (T54), 2 K1 on/T53
 //   (5s hold) started, 3 K2 0.5s power-on pulse (T52), 4 waiting for
 //   T53 to elapse, 5 K1 off/done.
-// Ignored while PowerOff_Step is mid-sequence, so K1/K2 are never
-// driven by both sequences in the same scan.
+// Edge memory uses raw symbol "FP 201.1" (matching Michou's own earlier
+// online rebuild, which already used this exact address for this exact
+// purpose) rather than a DB-resident bool - DB105 v0.13's refactor
+// dropped the dedicated ReCalib_ReqMem field this network used to read,
+// and this project already has precedent for a raw FP edge-memory
+// symbol (see "FP 200.6" in the pump-control network below).
       A     "GLUE SCALE CONTROL DB".Scale_ReCalib_Req;
-      FP    "GLUE SCALE CONTROL DB".ReCalib_ReqMem;
+      FP    "FP 201.1";
       JCN   RC_STP;
 
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
-      L     0;
-      <>I   ;
-      JC    RC_STP;
-      L     "GLUE SCALE CONTROL DB".PowerOff_Step;
       L     0;
       <>I   ;
       JC    RC_STP;
@@ -738,41 +766,62 @@ RC_S5: R     "OUTPUTS DB".KILOTECK_Calib_K1;
 RC_DN: NOP   0;
 
 NETWORK
-TITLE =Power-off sequence - K2 pulsed on for 3s, no K1 involved
-// LONG 3s K2 pulse powers the scale OFF (Michou, 2026-10-02). Ignored
-// while ReCalib_Step is mid-sequence.
-      A     "GLUE SCALE CONTROL DB".Scale_PowerOff_Req;
-      FP    "GLUE SCALE CONTROL DB".PowerOff_ReqMem;
-      JCN   PO_STP;
-
-      L     "GLUE SCALE CONTROL DB".PowerOff_Step;
-      L     0;
-      <>I   ;
-      JC    PO_STP;
+TITLE =Manual power-off pulse - 3s K2 pulse on Scale_PowerOFF_Pulse, auto-clears when done
+// DB105 v0.13 replaced the old PowerOff_Step/Scale_PowerOff_Req pair
+// with a single bool, Scale_PowerOFF_Pulse ("Scale Power-Off Process
+// (Power Hold 3s)") - no step counter needed for a single timed action.
+// Calling SD directly off this bit's own level is safe without separate
+// edge memory: SD only truly (re)starts on a rising edge of its enable
+// rung (established idiom, see the Lamp scan clock network's own
+// comment) - holding the bit doesn't retrigger it mid-pulse. Ignored
+// while ReCalib_Step is mid-sequence, so K2 is never driven by both
+// actions in the same scan. Clears Scale_PowerOFF_Pulse itself once the
+// pulse completes, so it reads as "idle" again afterward rather than
+// needing a separate status bit.
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     0;
       <>I   ;
-      JC    PO_STP;
+      JC    PWOF_DN;
 
-      L     1;
-      T     "GLUE SCALE CONTROL DB".PowerOff_Step;
-
-PO_STP: L     "GLUE SCALE CONTROL DB".PowerOff_Step;
-      L     1;
-      ==I   ;
-      JCN   PO_DN;
+      A     "GLUE SCALE CONTROL DB".Scale_PowerOFF_Pulse;
+      JCN   PWOF_DN;
 
       S     "OUTPUTS DB".KILOTECK_Power_K2;
       L     S5T#3S;
-      SD    T     54;
-      A     T     54;
-      JCN   PO_DN;
+      SD    T     56;
+      A     T     56;
+      JCN   PWOF_DN;
       R     "OUTPUTS DB".KILOTECK_Power_K2;
-      R     T     54;
-      L     0;
-      T     "GLUE SCALE CONTROL DB".PowerOff_Step;
+      R     T     56;
+      CLR   ;
+      =     "GLUE SCALE CONTROL DB".Scale_PowerOFF_Pulse;
 
-PO_DN: NOP   0;
+PWOF_DN: NOP   0;
+
+NETWORK
+TITLE =Manual power-on pulse - 500ms K2 pulse on Scale_PowerON_Pulse, auto-clears when done
+// Same idiom as the power-off pulse above, short pulse instead of long
+// (Michou: "Scale Power-On Process (Power Hold 500mS)"). Ignored while
+// ReCalib_Step is mid-sequence.
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     0;
+      <>I   ;
+      JC    PWON_DN;
+
+      A     "GLUE SCALE CONTROL DB".Scale_PowerON_Pulse;
+      JCN   PWON_DN;
+
+      S     "OUTPUTS DB".KILOTECK_Power_K2;
+      L     S5T#500MS;
+      SD    T     55;
+      A     T     55;
+      JCN   PWON_DN;
+      R     "OUTPUTS DB".KILOTECK_Power_K2;
+      R     T     55;
+      CLR   ;
+      =     "GLUE SCALE CONTROL DB".Scale_PowerON_Pulse;
+
+PWON_DN: NOP   0;
 
 NETWORK
 TITLE =Alarm lamps - RED_LED if any alarm latched, GRN_LED if none
