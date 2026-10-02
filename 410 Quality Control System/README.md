@@ -24,6 +24,15 @@ it isn't rediscovered the same way again:
 - **Individual network titles and inline comments are also length-capped**
   (STEP7 just silently truncates past the limit — a "Comment or title
   length too big" warning, not a fatal error, but still lossy).
+- **An `S`/`R`/`SD`/`SS`/etc. "coil" instruction right after a label that's
+  reached via a jump (`JC`/`JCN`/`JU`) can't trust RLO to be 1** — put an
+  explicit `SET;` before it. This file's own pump-control network already
+  did this correctly (`TRXF:`/`CLOS:` both have `SET;` before their
+  `S`/`R`); the v0.22-v0.24 power-sequence networks (`RCS1`/`RCS2`/`RCS3`/
+  `RCS5`) initially didn't, and Michou hit it for real ("ReCalib_Step goes
+  to value 3 and stuck") — fixed in v0.25. A plain `A`/`O`/etc. bit-logic
+  instruction right after a label doesn't have this problem — it loads
+  fresh regardless of what RLO was before the jump.
 
 ## Hardware / signal chain
 
@@ -231,19 +240,31 @@ elsewhere in the 410 project, same check as T50/T51.
 **Still open / flagged for confirmation**:
 - None of `Scale_ReCalib_Req`/`Scale_PowerOFF_Pulse`/`Scale_PowerON_Pulse`
   are wired to HMI buttons yet.
-- The `_Pnl` suffix question (Michou's earlier FC155 upload referenced
-  `WHT_SWL_1_Pnl`/`2_Pnl`/`3_Pnl`/`RED_LED_Pnl`/`GRN_LED_Pnl`) is now
-  **confirmed real for `RED_LED`/`GRN_LED`** — a real STEP7 compile
-  (2026-10-02) failed with "Symbol RED_LED is not a component of
-  OUTPUTS DB" for exactly those two, now renamed
-  `RED_LED_Pnl`/`GRN_LED_Pnl` throughout (FC155 v0.24, DB60 v0.2). That
-  same compile did NOT flag `WHT_SWL_1/2/3`, so those are left as plain
-  names — correct as far as the evidence goes, but not independently
-  confirmed the way RED/GRN now are.
+- `_Pnl` suffix: confirmed real for all five lamp outputs now
+  (`RED_LED_Pnl`/`GRN_LED_Pnl` by a real compile error; `WHT_SWL_1/2/3_Pnl`
+  by Michou's next working online version using them) — FC155 v0.25,
+  DB60 v0.3.
+- **"ReCalib_Step stuck at 3" (2026-10-02)**: fixed in FC155 v0.25 by
+  adding `SET;` before the `S`/`SD`/`R` coil at the start of
+  `RCS1`/`RCS2`/`RCS3`/`RCS5` (each reached via a jump, which can't be
+  trusted to leave RLO=1 — see "S7-300 STL hard limits" above). Not
+  100% certain this was the actual cause — if steps still stick after
+  this fix, the next suspect is **Timer 52 colliding with something
+  elsewhere in the live project** this repo can't see (the T50/T51
+  collision caution never got fully closed out, and the same applies to
+  T52-T56).
+- The "Update" network (`#UPDATE` := rising edge of `"M 6.7"`) now gates
+  "Detect scale fault" and "Overfill alarm" (and "Platform weight sanity
+  check" together with `Pump_ON`) behind `Pump_ON OR #UPDATE` instead of
+  running every scan — adopted from Michou's own online edit, but
+  **not independently confirmed as intentional**: if `M 6.7` only
+  pulses rarely, this means the scale-fault and overfill checks only
+  evaluate occasionally rather than continuously. Worth confirming given
+  these are safety-relevant checks.
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.24. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.25. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), pump control with
   overfill/underfill interlock, platform-weight sanity check + scale-fault
   pump interlock, alarm latching and reset, HMI DB bridge (setpoints, live
@@ -269,7 +290,7 @@ elsewhere in the 410 project, same check as T50/T51.
 - `HMI DB 10` — the HMI comms DB (DB10), version 0.3, owned by FC160,
   not this project's source of truth. Referenced here because FC155's
   HMI bridge (above) reads/writes several of its fields by symbol name.
-- `DB60_OUTPUTS_DB.awl` — version 0.1. `"OUTPUTS DB"`, the real shared
+- `DB60_OUTPUTS_DB.awl` — version 0.3. `"OUTPUTS DB"`, the real shared
   output DB (DB60) — GRN_LED/RED_LED/WHT_SWL_1/2/3 (already referenced
   by FC155), the new KILOTECK_Calib_K1/KILOTECK_Power_K2 relay bits, and
   every other output used by other 410 subsystems (tower lamps,
@@ -300,8 +321,6 @@ elsewhere in the 410 project, same check as T50/T51.
 - `PlatformMinWeight_SP` (30kg) is a best-guess default from Michou's
   "Platform free weight" description — confirm against the actual empty
   platform reading before relying on it to gate the pump.
-- The `_Pnl` lamp-symbol suffix for `WHT_SWL_1/2/3` — see "Power-up
-  calibration workaround" above and "S7-300 STL hard limits" at top.
 - Many NETWORK titles and inline comments throughout FC155/DB105 are
   long enough to trigger STEP7's "Comment or title length too big"
   warning (non-fatal, just silently truncated) — not fixed yet, lower

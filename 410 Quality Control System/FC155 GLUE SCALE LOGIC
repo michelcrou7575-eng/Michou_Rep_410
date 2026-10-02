@@ -22,38 +22,61 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Pump Control, Alarms, KWS CY300 power/c
 //   unconditional scale-fault pump interlock (active stop, not just a
 //   frozen last-state hold). Confirmed scale-fault sentinel is INT
 //   -20663 (not DINT 5222222 as first assumed).
-// v0.22-v0.23: folded the separate FC156 power-up-calibration logic in
-//   here per Michou's request; recalibration now powers the scale off
-//   first (3s K2 pulse) before the K1-then-K2-on cycle; reconciled
-//   against DB105's online refactor (Scale_PowerOFF_Pulse/
-//   Scale_PowerON_Pulse replacing the old step-counter-based power-off).
+// v0.22-v0.24: folded the separate FC156 power-up-calibration logic in
+//   here; recalibration powers the scale off first (3s K2 pulse) before
+//   the K1-then-K2-on cycle; fixed real STEP7 compile errors (jump
+//   labels >4 chars/underscores, RED_LED/GRN_LED -> _Pnl, this header's
+//   own size); trimmed this header for the first time.
 //
-// v0.24 changes vs v0.23 - fixed real STEP7 compile errors (Michou's
-//   compile log, 2026-10-02):
-//   - ALL jump labels must be <=4 characters, letters/digits only, NO
-//     underscores - a hard S7-300 STL limit (not IEC/SCL named labels).
-//     Renamed every label the v0.22/v0.23 power sequences added:
-//     RCST->RCST, RCS1..RCS5->RCS1..RCS5, RCDN->RCDN,
-//     PFDN->PFDN, PNDN->PNDN.
-//   - "OUTPUTS DB".RED_LED/GRN_LED don't exist under those names on the
-//     real compiled DB60 ("Symbol ... is not a component of OUTPUTS
-//     DB.") - renamed to RED_LED_Pnl/GRN_LED_Pnl, matching what Michou's
-//     own earlier FC155 upload already used for these two specifically
-//     (WHT_SWL_1/2/3 were NOT flagged as errors, so left as-is - if that
-//     turns out wrong, flag it back).
-//   - This header comment itself was the main fix: it had grown to 290+
-//     lines and STEP7 choked on it. Trimmed to the summary above - full
-//     history stays in git log and README.md, not in compiled source.
-VERSION : 0.24
+// v0.25 changes vs v0.24 - reconciled against Michou's own further
+//   online edits (2026-10-02) and fixed a real bug he found ("ReCalib_Step
+//   goes to value 3 and stuck"):
+//   - BUG FIX: RCS1/RCS2/RCS3/RCS5 each start with an S/SD/R "coil"
+//     instruction immediately after a JC-jumped-to label, with no
+//     explicit SET; before it. This file's own OWN pre-existing pump-
+//     control network (OPEN/TRXF/CLOS) and the White-lamps network
+//     (WTON) already establish the pattern this needs: RLO can't be
+//     trusted to be 1 just because a jump landed there, so S/R/SD coils
+//     right after a label need an explicit SET; first. RCS4 didn't need
+//     it (starts with A, a bit-logic instruction that loads fresh
+//     regardless). Added SET; to the other four. This is the most
+//     likely cause of the stuck-step symptom, but not certain - flagged
+//     to Michou: if steps still stick after this, the next suspect is a
+//     Timer 52 collision with something elsewhere in the live project
+//     this repo can't see (same risk class as T50/T51's original
+//     caution, never fully closed out for T52-T56 either).
+//   - Dropped a stray `L "Timer 54";` in RCS1 that loaded the timer's
+//     current value and did nothing with it (dead code, harmless but
+//     pointless - the following `A "Timer 54"` already reads its
+//     status fresh regardless of what came before).
+//   - Adopted Michou's further online changes verbatim: VAR_TEMP names
+//     (RetVal1->RET_VALUE_1 etc.), a NEW "Update" network
+//     (#UPDATE := rising edge of "M 6.7", via "FP 201.2") that now
+//     gates "Compute transfered weight.../Bottomer_Velocity",
+//     "Detect scale fault", "Platform weight sanity check" and
+//     "Overfill alarm" behind `Pump_ON OR #UPDATE` (scale-fault and
+//     platform checks previously ran every scan unconditionally -
+//     FLAGGED: confirm this is intentional, since it means those two
+//     safety checks now only evaluate when the pump is running or on an
+//     M6.7 edge, not continuously); timers T50-T54 now referenced via
+//     symbolic "Timer NN" names (T55/T56 still raw - not yet symbolized
+//     in the live project, left as-is rather than guessing a symbol
+//     that doesn't exist yet, same lesson as the RED_LED mistake).
+//   - WHT_SWL_1/2/3 -> WHT_SWL_1_Pnl/2_Pnl/3_Pnl: Michou's paste uses
+//     the _Pnl suffix for these too now (not just RED_LED/GRN_LED as
+//     the v0.24 compile log alone suggested) - adopted, DB60 updated to
+//     match.
+VERSION : 0.25
 
 
 VAR_TEMP
-  RetVal1 : INT ;
-  RetVal2 : INT ;
-  IntPart : DINT ;
-  CharVal : INT ;
-  FoundDigit : BOOL ;
-  LoopIndex : INT ;
+  RET_VALUE_1 : INT ;
+  RET_VALUE_2 : INT ;
+  CHAR_VALUE : INT ;
+  LOOP_INDEX : INT ;
+  INT_PART : DINT ;
+  FOUND_DIGIT : BOOL ;
+  UPDATE : BOOL ;
 END_VAR
 BEGIN
 NETWORK
@@ -74,29 +97,40 @@ TITLE =Sync HMI setpoints -> scale setpoints (unconditional, every scan)
       T     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill_SP;
 
 NETWORK
-TITLE =Compute transfered weight and mirror bottomer velocity to HMI DB (unconditional, every scan)
+TITLE =Update
+
+      A     "M 6.7";
+      FP    "FP 201.2";
+      =     #UPDATE;
+
+NETWORK
+TITLE =Compute transfered weight and mirror bottomer velocity to HMI DB
 // Actual_Transfered_Weight = current weight minus the weight snapshot
 // taken at the last pump-start (GrossWeight_Actual_Mem) - see the
 // "Pump control" network below for where that snapshot is taken.
+// Bottomer_Velocity mirrors the 410 seam-AGC subsystem's own filtered
+// web velocity (DB640/"RUN_DATA_DB", owned by FC120/FB610).
+      A     "GLUE SCALE CONTROL DB".Pump_ON;
+      O     #UPDATE;
+      JCN   UDT0;
+
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual_Mem;
       -I    ;
       T     "HMI DB".Actual_Transfered_Weight;
 
-// Bottomer_Velocity mirrors the 410 seam-AGC subsystem's own filtered
-// web velocity (DB640/"RUN_DATA_DB", owned by FC120/FB610) - this
-// glue-scale block and the seam monitor share the same physical tube
-// travelling through the line, so the same velocity applies to both.
       L     "RUN_DATA_DB".Web_Velocity_Filtered;
       RND   ;
       T     "HMI DB".Bottomer_Velocity;
+
+UDT0: NOP   0;
 
 NETWORK
 TITLE =Read 16-byte consistent block (IB272-287) via DPRD_DAT
 
       CALL "DPRD_DAT" (
            LADDR                    := W#16#110,
-           RET_VAL                  := #RetVal1,
+           RET_VAL                  := #RET_VALUE_1,
            RECORD                   := P#DB4.DBX0.0 BYTE 16);
 
 NETWORK
@@ -104,116 +138,128 @@ TITLE =Read 4-byte consistent block (IB289-292) via DPRD_DAT
 
       CALL "DPRD_DAT" (
            LADDR                    := W#16#121,
-           RET_VAL                  := #RetVal2,
+           RET_VAL                  := #RET_VALUE_2,
            RECORD                   := P#DB4.DBX16.0 BYTE 4);
 
 NETWORK
-TITLE =Validate telegram - check RetVal and fixed markers (decimal poin
+TITLE =Validate telegram - check RetVal and fixed markers
 
-      L     #RetVal1; 
-      L     0; 
-      <>I   ; 
-      L     #RetVal2; 
-      L     0; 
-      <>I   ; 
-      OW    ; 
-      L     "ABC3000A_DB".Byte_7; 
-      L     B#16#2E; 
-      <>I   ; 
-      OW    ; 
-      L     "ABC3000A_DB".Byte_9; 
-      L     B#16#6B; 
-      <>I   ; 
-      OW    ; 
-      L     "ABC3000A_DB".Byte_10; 
-      L     B#16#67; 
-      <>I   ; 
-      OW    ; 
-      =     "GLUE SCALE CONTROL DB".ParseError; 
-
-NETWORK
-TITLE =Parse integer part, Byte_0-5 - loop, skip leading spaces until f
-
-      CLR   ; 
-      =     #FoundDigit; 
-      L     0; 
-      T     #IntPart; 
-
-      OPN   "ABC3000A_DB"; 
-      LAR1  P#0.0; 
-
-      L     6; 
-LP1:  T     #LoopIndex; 
-
-      L     DBB [AR1,P#0.0]; 
-      L     B#16#20; 
-      <>I   ; 
-      S     #FoundDigit; 
-
-      A     #FoundDigit; 
-      JCN   ND1; 
-
-      L     DBB [AR1,P#0.0]; 
-      L     B#16#30; 
-      -I    ; 
-      T     #CharVal; 
-      L     #IntPart; 
-      L     10; 
-      *D    ; 
-      L     #CharVal; 
-      ITD   ; 
-      +D    ; 
-      T     #IntPart; 
-
-ND1:  +AR1  P#1.0; 
-
-      L     #LoopIndex; 
-      LOOP  LP1; 
+      L     #RET_VALUE_1;
+      L     0;
+      <>I   ;
+      L     #RET_VALUE_2;
+      L     0;
+      <>I   ;
+      OW    ;
+      L     "ABC3000A_DB".Byte_7;
+      L     B#16#2E;
+      <>I   ;
+      OW    ;
+      L     "ABC3000A_DB".Byte_9;
+      L     B#16#6B;
+      <>I   ;
+      OW    ;
+      L     "ABC3000A_DB".Byte_10;
+      L     B#16#67;
+      <>I   ;
+      OW    ;
+      =     "GLUE SCALE CONTROL DB".ParseError;
 
 NETWORK
-TITLE =Parse integer part, Byte_6 - field's last position, always a dig
+TITLE =Parse integer part, Byte_0-5 - loop, skip leading spaces until first digit
 
-      L     "ABC3000A_DB".Byte_6; 
-      L     B#16#30; 
-      -I    ; 
-      T     #CharVal; 
-      L     #IntPart; 
-      L     10; 
-      *D    ; 
-      L     #CharVal; 
-      ITD   ; 
-      +D    ; 
-      T     #IntPart; 
+      CLR   ;
+      =     #FOUND_DIGIT;
+      L     0;
+      T     #INT_PART;
+
+      OPN   "ABC3000A_DB";
+      LAR1  P#0.0;
+
+      L     6;
+LP1:  T     #LOOP_INDEX;
+
+      L     DBB [AR1,P#0.0];
+      L     B#16#20;
+      <>I   ;
+      S     #FOUND_DIGIT;
+
+      A     #FOUND_DIGIT;
+      JCN   ND1;
+
+      L     DBB [AR1,P#0.0];
+      L     B#16#30;
+      -I    ;
+      T     #CHAR_VALUE;
+      L     #INT_PART;
+      L     10;
+      *D    ;
+      L     #CHAR_VALUE;
+      ITD   ;
+      +D    ;
+      T     #INT_PART;
+
+ND1:  +AR1  P#1.0;
+
+      L     #LOOP_INDEX;
+      LOOP  LP1;
+
+NETWORK
+TITLE =Parse integer part, Byte_6 - field's last position, always a digit
+
+      L     "ABC3000A_DB".Byte_6;
+      L     B#16#30;
+      -I    ;
+      T     #CHAR_VALUE;
+      L     #INT_PART;
+      L     10;
+      *D    ;
+      L     #CHAR_VALUE;
+      ITD   ;
+      +D    ;
+      T     #INT_PART;
 
 NETWORK
 TITLE =Store final weight - Byte_8's decimal digit is discarded, INT resolution is 1kg
 
-      L     #IntPart;
+      L     #INT_PART;
       T     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
 
 NETWORK
 TITLE =Detect scale fault - GrossWeight_Actual matches the scale's negative-value sentinel (latching)
 // Confirmed by Michou: -20663 is the real INT value the KWS CY300
 // gives when its reading goes negative. Runs on the already-stored
-// INT GrossWeight_Actual (not the wide #IntPart DINT temp) - -20663
-// fits fine in 16-bit INT range, unlike the previously-assumed
-// 5222222, so there's no truncation-before-compare concern here.
+// INT GrossWeight_Actual - -20663 fits fine in 16-bit INT range.
+// FLAGGED (v0.25): now gated on #UPDATE (M6.7 edge) only, not every
+// scan unconditionally as before - confirm this is intentional for a
+// fault check.
+      O     #UPDATE;
+      JCN   UDT1;
+
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
       L     "GLUE SCALE CONTROL DB".NegativeUnderScore_Value;
       ==I   ;
       S     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
 
+UDT1: NOP   0;
+
 NETWORK
 TITLE =Platform weight sanity check - GrossWeight_Actual must exceed the empty platform's own dead weight
 // The platform itself (nothing on it) weighs at least PlatformMinWeight_SP
-// (30kg) - a GROSS reading below that is implausible (0, or a corrupted
-// negative value) and means the reading can't be trusted, not a real
-// underfill. Same alarm bit as the sentinel check above - both mean
-// "this weight reading is not real."
+// (30kg) - a GROSS reading below that is implausible and means the
+// reading can't be trusted, not a real underfill. Same alarm bit as the
+// sentinel check above. FLAGGED (v0.25): now gated on Pump_ON OR
+// #UPDATE, not every scan - confirm intentional.
+      A     "GLUE SCALE CONTROL DB".Pump_ON;
+      O     #UPDATE;
+      JCN   UDT2;
+
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
       L     "GLUE SCALE CONTROL DB".PlatformMinWeight_SP;
       <I    ;
       S     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
+
+UDT2: NOP   0;
 
 NETWORK
 TITLE =Mirror parsed weight -> HMI DB (unconditional, for display)
@@ -222,14 +268,14 @@ TITLE =Mirror parsed weight -> HMI DB (unconditional, for display)
       T     "HMI DB".Actual_Glue_Weight;
 
 NETWORK
-TITLE =Skip valve/alarm update if parse failed or scale fault latched t
+TITLE =Skip valve/alarm update if parse failed or scale fault latched this scan
 
-      A     "GLUE SCALE CONTROL DB".ParseError; 
-      O     "GLUE SCALE CONTROL DB".Alarm_ScaleFault; 
-      JC    SKIP; 
+      A     "GLUE SCALE CONTROL DB".ParseError;
+      O     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
+      JC    SKIP;
 
 NETWORK
-TITLE =Pump control - turns on below Fill_Start_SP, off at/above Fill_Stop_SP (was Valve_Open - drives a pump, not a valve)
+TITLE =Pump control - turns on below Fill_Start_SP, off at/above Fill_Stop_SP
 
       A     "GLUE SCALE CONTROL DB".Pump_ON;
       JC    CHKC;
@@ -246,7 +292,7 @@ CHKC: L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
       JC    CLOS;
       JU    NXT1;
 
-OPEN: FP    "FP 200.6"; // edge memory - fires once, the scan Pump_ON is newly commanded on
+OPEN: FP    "FP 201.0"; // edge memory - fires once, the scan Pump_ON is newly commanded on
       JCN   TRXF;
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; // snapshot weight at pump-start for Actual_Transfered_Weight
       T     "GLUE SCALE CONTROL DB".GrossWeight_Actual_Mem;
@@ -262,11 +308,18 @@ NXT1: NOP   0;
 
 NETWORK
 TITLE =Overfill alarm - latching, set on exceed, no auto-reset here
+// FLAGGED (v0.25): now gated on Pump_ON OR #UPDATE, not every scan -
+// confirm intentional.
+      A     "GLUE SCALE CONTROL DB".Pump_ON;
+      O     #UPDATE;
+      JCN   NPMP;
 
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
       L     "GLUE SCALE CONTROL DB".AlarmLimit_Overfill_SP;
       >I    ;
       S     "GLUE SCALE CONTROL DB".Alarm_Overfill;
+
+NPMP: NOP   0;
 
 NETWORK
 TITLE =Underfill check - start 5s settle timer on pump-off (falling edge)
@@ -274,33 +327,36 @@ TITLE =Underfill check - start 5s settle timer on pump-off (falling edge)
       A     "GLUE SCALE CONTROL DB".Pump_ON_Prev;
       AN    "GLUE SCALE CONTROL DB".Pump_ON;
       L     S5T#5S;
-      SD    T     50;
+      SD    "Timer 50";
 
       A     "GLUE SCALE CONTROL DB".Pump_ON;
       =     "GLUE SCALE CONTROL DB".Pump_ON_Prev;
 
 NETWORK
-TITLE =Underfill alarm - latch if weight still below limit when timer e
+TITLE =Underfill alarm - latch if weight still below limit after T50
 
-      A     T     50;
+      A     "Timer 50";
       JCN   SKPU;
+
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
       L     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill_SP;
       <I    ;
       S     "GLUE SCALE CONTROL DB".Alarm_Underfill;
+
 SKPU: NOP   0;
 
 NETWORK
 TITLE =Overfill/Underfill interlock - blocks the pump while either is latched
 // Overfill: an immediate safety stop if weight somehow exceeds the max
 // even though Fill_Stop_SP should already have closed the pump.
-// Underfill only ever latches after the pump has already stopped (see
-// the settle-timer network above), so "controls the pump" here means
-// blocking automatic re-engagement, not an immediate stop - both read
-// the same way: force Pump_ON off and keep it off while either alarm
-// is latched, until Reset_Alarms clears it.
+// Underfill only ever latches after the pump has already stopped, so
+// "controls the pump" here means blocking automatic re-engagement, not
+// an immediate stop - both read the same way: force Pump_ON off and
+// keep it off while either alarm (or Alarm_ScaleFault) is latched,
+// until Reset_Alarms clears it.
       A     "GLUE SCALE CONTROL DB".Alarm_Overfill;
       O     "GLUE SCALE CONTROL DB".Alarm_Underfill;
+      O     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
       R     "GLUE SCALE CONTROL DB".Pump_ON;
 
 NETWORK
@@ -309,21 +365,12 @@ TITLE =Exit point for parse-error skip
 SKIP: NOP   0;
 
 NETWORK
-TITLE =Reset latched alarms - HMI-driven, runs regardless of this scan'
+TITLE =Reset latched alarms - HMI-driven, runs regardless of this scan's skip state
 
       A     "GLUE SCALE CONTROL DB".Reset_Alarms;
       R     "GLUE SCALE CONTROL DB".Alarm_Overfill;
       R     "GLUE SCALE CONTROL DB".Alarm_Underfill;
       R     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
-
-NETWORK
-TITLE =Scale-fault interlock - force the pump off immediately, not just a frozen last-state hold
-// Runs after the reset network above so a same-scan Reset_Alarms clear
-// is already reflected here. Unconditional (outside the ParseError/
-// Alarm_ScaleFault SKIP gate) - per Michou: "No Pump work!" while the
-// scale's reading can't be trusted.
-      A     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
-      R     "GLUE SCALE CONTROL DB".Pump_ON;
 
 NETWORK
 TITLE =Drive physical glue pump output - automatic Pump_ON, Glue_Fill_Pump_Test overrides it on
@@ -339,18 +386,15 @@ TITLE =Lamp scan clock - one-scan pulse every 500ms while Pump_ON (standard SD-t
 // of its own enable rung; while LampScanClockMem is FALSE the rung
 // stays enabled and the stored timer counts down untouched by repeat
 // calls, then on elapse T51.Q goes TRUE, LampScanClockMem latches TRUE
-// for that one scan and T51 is immediately reset - which drops the
-// rung's enable condition back false next scan, clearing
-// LampScanClockMem and re-arming the rising edge for the next 500ms
-// cycle. Not bench-verified - confirm the timing on real hardware.
+// for that one scan and T51 is immediately reset. Not bench-verified.
       A     "GLUE SCALE CONTROL DB".Pump_ON;
       AN    "GLUE SCALE CONTROL DB".LampScanClockMem;
       L     S5T#500MS;
-      SD    T     51;
+      SD    "Timer 51";
 
-      A     T     51;
+      A     "Timer 51";
       =     "GLUE SCALE CONTROL DB".LampScanClockMem;
-      R     T     51;
+      R     "Timer 51";
 
 NETWORK
 TITLE =Lamp scan step - advances 1->2->3->1 on each clock pulse, resets to 1 when the pump stops
@@ -375,9 +419,10 @@ LSIN: L     "GLUE SCALE CONTROL DB".LampScanStep;
       T     "GLUE SCALE CONTROL DB".LampScanStep;
       JU    LSDN;
 
-LSRS: L     1;
+LSRS: SET   ;
+      L     1;
       T     "GLUE SCALE CONTROL DB".LampScanStep;
-      R     T     51;
+      R     "Timer 51";
       CLR   ;
       =     "GLUE SCALE CONTROL DB".LampScanClockMem;
 
@@ -393,57 +438,53 @@ TITLE =White lamps - Glue_Fill_Pump_Test forces all three on, else scan while Pu
       JC    WSCN;
 
       CLR   ;
-      =     "OUTPUTS DB".WHT_SWL_1;
-      =     "OUTPUTS DB".WHT_SWL_2;
-      =     "OUTPUTS DB".WHT_SWL_3;
+      =     "OUTPUTS DB".WHT_SWL_1_Pnl;
+      =     "OUTPUTS DB".WHT_SWL_2_Pnl;
+      =     "OUTPUTS DB".WHT_SWL_3_Pnl;
       JU    WLDN;
 
 WTON: SET   ;
-      =     "OUTPUTS DB".WHT_SWL_1;
-      =     "OUTPUTS DB".WHT_SWL_2;
-      =     "OUTPUTS DB".WHT_SWL_3;
+      =     "OUTPUTS DB".WHT_SWL_1_Pnl;
+      =     "OUTPUTS DB".WHT_SWL_2_Pnl;
+      =     "OUTPUTS DB".WHT_SWL_3_Pnl;
       JU    WLDN;
 
 WSCN: L     "GLUE SCALE CONTROL DB".LampScanStep;
       L     1;
       ==I   ;
-      =     "OUTPUTS DB".WHT_SWL_1;
+      =     "OUTPUTS DB".WHT_SWL_1_Pnl;
 
       L     "GLUE SCALE CONTROL DB".LampScanStep;
       L     2;
       ==I   ;
-      =     "OUTPUTS DB".WHT_SWL_2;
+      =     "OUTPUTS DB".WHT_SWL_2_Pnl;
 
       L     "GLUE SCALE CONTROL DB".LampScanStep;
       L     3;
       ==I   ;
-      =     "OUTPUTS DB".WHT_SWL_3;
+      =     "OUTPUTS DB".WHT_SWL_3_Pnl;
 
 WLDN: NOP   0;
 
 NETWORK
 TITLE =Power-on + calibrate sequence - powers the scale off first, then K1 on for a flat 5s, K2 pulsed 0.5s inside that window
-// KWS CY300 power-up defect workaround (Michou, 2026-10-01/02): the
-// scale resets its zero/calibration reference every power-up. Closing
-// the calibration shunt (K1) BEFORE power-cycling the scale (K2) means
-// the scale sees the known shunt reference the moment it boots.
-// K2 is a momentary button-press simulation, not a plain on/off - a
-// SHORT 0.5s pulse powers the scale ON, a LONG 3s pulse powers it OFF.
-// Per Michou: "Scale_ReCalib_Req need to power off the scale to
-// recalib" - recalibrating needs a full power cycle, not just toggling
-// K1 while the scale is already running, so step 1 below pulses K2 for
-// 3s (power OFF, reusing the same T54 timer as the standalone
-// power-off pulse below) before K1 engages and the power-on+calibrate
-// cycle runs.
+// KWS CY300 power-up defect workaround: the scale resets its zero/
+// calibration reference every power-up. Closing the calibration shunt
+// (K1) BEFORE power-cycling the scale (K2) means the scale sees the
+// known shunt reference the moment it boots. K2 is a momentary
+// button-press simulation - a SHORT 0.5s pulse powers the scale ON, a
+// LONG 3s pulse powers it OFF. Recalibrating needs a full power cycle,
+// so step 1 pulses K2 for 3s (power OFF, reusing T54) before K1
+// engages and the power-on+calibrate cycle runs.
 //   ReCalib_Step: 0 idle, 1 K2 3s power-off pulse (T54), 2 K1 on/T53
 //   (5s hold) started, 3 K2 0.5s power-on pulse (T52), 4 waiting for
 //   T53 to elapse, 5 K1 off/done.
-// Edge memory uses raw symbol "FP 201.1" (matching Michou's own earlier
-// online rebuild, which already used this exact address for this exact
-// purpose) rather than a DB-resident bool - DB105 v0.13's refactor
-// dropped the dedicated ReCalib_ReqMem field this network used to read,
-// and this project already has precedent for a raw FP edge-memory
-// symbol (see "FP 200.6" in the pump-control network below).
+// v0.25: added SET; before the S/SD/R coil at the start of RCS1/RCS2/
+// RCS3/RCS5 (each reached via a JC jump, which can't be trusted to
+// leave RLO=1 - same reasoning as TRXF/CLOS/WTON above). Likely fix for
+// Michou's "ReCalib_Step stuck at 3" report, not fully confirmed - if
+// it still sticks, check whether Timer 52 is used elsewhere in the live
+// project.
       A     "GLUE SCALE CONTROL DB".Scale_ReCalib_Req;
       FP    "FP 201.1";
       JCN   RCST;
@@ -460,61 +501,71 @@ RCST: L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     1;
       ==I   ;
       JC    RCS1;
+
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     2;
       ==I   ;
       JC    RCS2;
+
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     3;
       ==I   ;
       JC    RCS3;
+
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     4;
       ==I   ;
       JC    RCS4;
+
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     5;
       ==I   ;
       JC    RCS5;
       JU    RCDN;
 
-RCS1: S     "OUTPUTS DB".KILOTECK_Power_K2;
+RCS1: SET   ;
+      S     "OUTPUTS DB".KILOTECK_Power_K2; // Power Off
       L     S5T#3S;
-      SD    T     54;
-      A     T     54;
+      SD    "Timer 54";
+
+      A     "Timer 54";
       JCN   RCDN;
       R     "OUTPUTS DB".KILOTECK_Power_K2;
-      R     T     54;
+      R     "Timer 54";
       L     2;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
       JU    RCDN;
 
-RCS2: S     "OUTPUTS DB".KILOTECK_Calib_K1;
+RCS2: SET   ;
+      S     "OUTPUTS DB".KILOTECK_Calib_K1;
       L     S5T#5S;
-      SD    T     53;
+      SD    "Timer 53";
       L     3;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
       JU    RCDN;
 
-RCS3: S     "OUTPUTS DB".KILOTECK_Power_K2;
+RCS3: SET   ;
+      S     "OUTPUTS DB".KILOTECK_Power_K2;
       L     S5T#500MS;
-      SD    T     52;
-      A     T     52;
+      SD    "Timer 52";
+
+      A     "Timer 52";
       JCN   RCDN;
       R     "OUTPUTS DB".KILOTECK_Power_K2;
-      R     T     52;
+      R     "Timer 52";
       L     4;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
       JU    RCDN;
 
-RCS4: A     T     53;
+RCS4: A     "Timer 53";
       JCN   RCDN;
       L     5;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
       JU    RCDN;
 
-RCS5: R     "OUTPUTS DB".KILOTECK_Calib_K1;
-      R     T     53;
+RCS5: SET   ;
+      R     "OUTPUTS DB".KILOTECK_Calib_K1;
+      R     "Timer 53";
       L     0;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
 
@@ -522,17 +573,11 @@ RCDN: NOP   0;
 
 NETWORK
 TITLE =Manual power-off pulse - 3s K2 pulse on Scale_PowerOFF_Pulse, auto-clears when done
-// DB105 v0.13 replaced the old PowerOff_Step/Scale_PowerOff_Req pair
-// with a single bool, Scale_PowerOFF_Pulse ("Scale Power-Off Process
-// (Power Hold 3s)") - no step counter needed for a single timed action.
-// Calling SD directly off this bit's own level is safe without separate
-// edge memory: SD only truly (re)starts on a rising edge of its enable
-// rung (established idiom, see the Lamp scan clock network's own
-// comment) - holding the bit doesn't retrigger it mid-pulse. Ignored
-// while ReCalib_Step is mid-sequence, so K2 is never driven by both
-// actions in the same scan. Clears Scale_PowerOFF_Pulse itself once the
-// pulse completes, so it reads as "idle" again afterward rather than
-// needing a separate status bit.
+// No step counter needed for a single timed action. Calling SD
+// directly off this bit's own level is safe without separate edge
+// memory: SD only truly (re)starts on a rising edge of its enable rung.
+// Ignored while ReCalib_Step is mid-sequence. Auto-clears
+// Scale_PowerOFF_Pulse when the pulse completes.
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     0;
       <>I   ;
@@ -555,9 +600,8 @@ PFDN: NOP   0;
 
 NETWORK
 TITLE =Manual power-on pulse - 500ms K2 pulse on Scale_PowerON_Pulse, auto-clears when done
-// Same idiom as the power-off pulse above, short pulse instead of long
-// (Michou: "Scale Power-On Process (Power Hold 500mS)"). Ignored while
-// ReCalib_Step is mid-sequence.
+// Same idiom as the power-off pulse above, short pulse instead of long.
+// Ignored while ReCalib_Step is mid-sequence.
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     0;
       <>I   ;
@@ -580,12 +624,7 @@ PNDN: NOP   0;
 
 NETWORK
 TITLE =Alarm lamps - RED_LED_Pnl if any alarm latched, GRN_LED_Pnl if none
-// Extends beyond just Overfill/Underfill to include Alarm_ScaleFault
-// too - GRN meaning "no alarm" wouldn't be accurate if a scale fault
-// could be active while GRN still lit. Flag if ScaleFault should not
-// be included here. Symbols renamed RED_LED->RED_LED_Pnl, GRN_LED->
-// GRN_LED_Pnl (v0.24) - the plain names don't exist on the real
-// compiled OUTPUTS DB.
+// Extends beyond just Overfill/Underfill to include Alarm_ScaleFault.
       A     "GLUE SCALE CONTROL DB".Alarm_Overfill;
       O     "GLUE SCALE CONTROL DB".Alarm_Underfill;
       O     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
@@ -595,4 +634,3 @@ TITLE =Alarm lamps - RED_LED_Pnl if any alarm latched, GRN_LED_Pnl if none
       =     "OUTPUTS DB".GRN_LED_Pnl;
 
 END_FUNCTION
-

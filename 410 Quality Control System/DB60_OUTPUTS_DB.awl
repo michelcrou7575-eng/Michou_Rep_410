@@ -34,9 +34,14 @@ TITLE =Shared digital outputs (multiple 410 subsystems)
 //   component of OUTPUTS DB" / same for GRN_LED - so the "_Pnl" suffix
 //   flagged in v0.1 WAS real for these two. Renamed RED_LED ->
 //   RED_LED_Pnl, GRN_LED -> GRN_LED_Pnl. WHT_SWL_1/2/3 were NOT flagged
-//   by that same compile, so left as plain names - if that's wrong,
-//   flag it back. See FC155 v0.24 for the matching logic change.
-VERSION : 0.2
+//   by that same compile, so left as plain names at the time.
+//
+// v0.3 changes vs v0.2 - Michou's next online FC155 paste (2026-10-02)
+//   uses WHT_SWL_1_Pnl/2_Pnl/3_Pnl too, and that version compiles clean
+//   (he's past compile errors, debugging logic now) - so the _Pnl
+//   suffix is real for all five lamp outputs, not just RED/GRN. Renamed
+//   WHT_SWL_1/2/3 -> WHT_SWL_1_Pnl/2_Pnl/3_Pnl to match. See FC155 v0.25.
+VERSION : 0.3
 
 
   STRUCT 	
@@ -98,9 +103,9 @@ VERSION : 0.2
    Output_054 : BOOL ;	//Temporary placeholder variable
    GRN_LED_Pnl : BOOL ;	// - IO 8Bit Output ET-200B 8/8
    RED_LED_Pnl : BOOL ;	// - IO 8Bit Output ET-200B 8/8
-   WHT_SWL_1 : BOOL ;	// - IO 8Bit Output ET-200B 8/8
-   WHT_SWL_2 : BOOL ;	// - IO 8Bit Output ET-200B 8/8
-   WHT_SWL_3 : BOOL ;	// - IO 8Bit Output ET-200B 8/8
+   WHT_SWL_1_Pnl : BOOL ;	// - IO 8Bit Output ET-200B 8/8
+   WHT_SWL_2_Pnl : BOOL ;	// - IO 8Bit Output ET-200B 8/8
+   WHT_SWL_3_Pnl : BOOL ;	// - IO 8Bit Output ET-200B 8/8
    Output_060 : BOOL ;	// - IO 8Bit Output ET-200B 8/8
    KILOTECK_Calib_K1 : BOOL ;	//DBX7.6 - K1 coil, PLC terminal 40 - applies the KWS CY300 shunt-cal loop, see FC156 (was Output_061)
    KILOTECK_Power_K2 : BOOL ;	//DBX7.7 - K2 coil, PLC terminal 39 - bridges KWS CY300 ON/OFF to Com, remote power pulse, see FC156 (was Output_062)
@@ -373,9 +378,9 @@ BEGIN
    Output_054 := FALSE; 
    GRN_LED_Pnl := FALSE; 
    RED_LED_Pnl := FALSE; 
-   WHT_SWL_1 := FALSE; 
-   WHT_SWL_2 := FALSE; 
-   WHT_SWL_3 := FALSE; 
+   WHT_SWL_1_Pnl := FALSE; 
+   WHT_SWL_2_Pnl := FALSE; 
+   WHT_SWL_3_Pnl := FALSE; 
    Output_060 := FALSE; 
    KILOTECK_Calib_K1 := FALSE; 
    KILOTECK_Power_K2 := FALSE; 
