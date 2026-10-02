@@ -184,7 +184,19 @@ TITLE =Glue Scale Weight Control and Alarms  DB105
 //     telegram value (not a test/debug value), flag it back - the
 //     5222222 sentinel and PlatformMinWeight_SP range check can both
 //     stay in place alongside a third exact-match check if truly needed.
-VERSION : 0.11
+//
+// v0.12 changes vs v0.11 - confirmed by Michou (2026-10-02): -20663 IS
+//   the real value, not a test artifact - "the INT the Scale gives when
+//   Negative Weight is computed", explicitly replacing 5222222/DINT
+//   ("no more DINT/5222222!"). NegativeUnderScore_Value reverts to INT
+//   (fits fine - -20663 is well within +/-32767, unlike 5222222), value
+//   -20663. See FC155 v0.21 for the corresponding comparison-network
+//   change (now runs on the truncated INT GrossWeight_Actual, not the
+//   wide DINT parse temp - no longer needed now that the sentinel fits
+//   in 16 bits). Also folds FC156's two sequences directly into FC155
+//   (per Michou: "FC155 containes your FC156") - this DB's own fields
+//   are unchanged by that move, only FC155/FC156 as files change.
+VERSION : 0.12
 
   STRUCT
    GrossWeight_Actual : INT ;	//Parsed live weight from KWS CY300 scale (kg) - whole kg, scale's decimal digit is discarded (see FC155)
@@ -195,11 +207,11 @@ VERSION : 0.11
    AlarmLimit_Underfill_SP : INT ;	//Operator-entered min allowed weight (kg) - HMI writable - latching, interlocks Pump_ON off
    PlatformMinWeight_SP : INT ;	//NEW v0.10 - empty-platform dead weight (kg) - GrossWeight_Actual below this latches Alarm_ScaleFault (reading can't be trusted) - internal constant, not HMI-bridged
    Actual_Transfered_Weight : INT ;	//NEW v0.11 - appeared online, not yet wired to anything (the live calc still only writes "HMI DB".Actual_Transfered_Weight, see FC155)
-   NegativeUnderScore_Value : DINT ;	//Fixed sentinel value the KWS CY300 sends when its reading is negative (scale fault) - DINT, not INT: 5222222 doesn't fit in 16 bits - see FC155
+   NegativeUnderScore_Value : INT ;	//Fixed sentinel value the KWS CY300 sends when its reading is negative (scale fault) - confirmed -20663 by Michou, INT (fits fine) - see FC155
    Hysteresis : INT ;	//Reserved - no longer read by FC155's pump-control network (see v0.3 changelog); kept for struct-layout compatibility
    LampScanStep : INT ;	//NEW v0.9 - current white-lamp scan index (1/2/3) while the pump runs - see FC155
-   ReCalib_Step : INT ;	//NEW v0.11 - FC156 power-on+calibrate sequence step, 0-4 - see FC156
-   PowerOff_Step : INT ;	//NEW v0.11 - FC156 power-off sequence step, 0-1 - see FC156
+   ReCalib_Step : INT ;	//NEW v0.11 - power-on+calibrate sequence step, 0-4 - see FC155
+   PowerOff_Step : INT ;	//NEW v0.11 - power-off sequence step, 0-1 - see FC155
    SpareReal1 : REAL ;	//NEW v0.7 - appeared online, not yet wired to anything
    SpareReal2 : REAL ;	//NEW v0.7 - appeared online, not yet wired to anything
    Pump_ON : BOOL ;	//Output: TRUE = glue fill pump commanded on, filling in progress - mirrored onto "HMI DB".Glue_Fill_Pump_ON by FC155 (was Valve_Open)
@@ -208,13 +220,13 @@ VERSION : 0.11
    ParseError : BOOL ;	//Output: TRUE = ASCII parse failed this scan (bad/garbled scale data)
    Pump_ON_Prev : BOOL ;	//Internal: previous scan Pump_ON state, for edge detection (was Valve_Open_Prev)
    Scale_Powered_On : BOOL ;	//Live Data Coming In - not yet wired by FC155
-   Alarm_ScaleFault : BOOL ;	//Output: TRUE = the scale's raw parsed integer matched NegativeUnderScore_Value, OR GrossWeight_Actual fell below PlatformMinWeight_SP (latching) - the weight reading isn't trustworthy - drives RED_LED, forces Pump_ON off immediately
+   Alarm_ScaleFault : BOOL ;	//Output: TRUE = GrossWeight_Actual matched NegativeUnderScore_Value (-20663, confirmed real), OR fell below PlatformMinWeight_SP (latching) - the weight reading isn't trustworthy - drives RED_LED, forces Pump_ON off immediately
    Reset_Alarms : BOOL ;	//Input: HMI-driven, hold/pulse TRUE to clear Alarm_Overfill, Alarm_Underfill and Alarm_ScaleFault
    LampScanClockMem : BOOL ;	//NEW v0.9 - internal, one-scan-wide 500ms flasher pulse driving LampScanStep - see FC155
-   Scale_ReCalib_Req : BOOL ;	//NEW v0.11 - Input: HMI/manual, pulse or hold TRUE to start FC156's power-on + calibrate sequence
-   ReCalib_ReqMem : BOOL ;	//NEW v0.11 - Internal: edge memory for Scale_ReCalib_Req, see FC156
-   Scale_PowerOff_Req : BOOL ;	//NEW v0.11 - Input: HMI/manual, pulse or hold TRUE to start FC156's power-off sequence
-   PowerOff_ReqMem : BOOL ;	//NEW v0.11 - Internal: edge memory for Scale_PowerOff_Req, see FC156
+   Scale_ReCalib_Req : BOOL ;	//NEW v0.11 - Input: HMI/manual, pulse or hold TRUE to start the power-on + calibrate sequence, see FC155
+   ReCalib_ReqMem : BOOL ;	//NEW v0.11 - Internal: edge memory for Scale_ReCalib_Req, see FC155
+   Scale_PowerOff_Req : BOOL ;	//NEW v0.11 - Input: HMI/manual, pulse or hold TRUE to start the power-off sequence, see FC155
+   PowerOff_ReqMem : BOOL ;	//NEW v0.11 - Internal: edge memory for Scale_PowerOff_Req, see FC155
    Scale_PowerON_Pulse : BOOL ;	//NEW v0.11 - appeared online, not yet wired to anything, no confirmed intended behavior
    Spare_11 : BOOL ;	//NEW v0.11 - appeared online, spare
    Spare_12 : BOOL ;	//NEW v0.11 - appeared online, spare
@@ -231,7 +243,7 @@ BEGIN
    AlarmLimit_Underfill_SP := 20;
    PlatformMinWeight_SP := 30;
    Actual_Transfered_Weight := 0;
-   NegativeUnderScore_Value := L#5222222;
+   NegativeUnderScore_Value := -20663;
    Hysteresis := 2;
    LampScanStep := 1;
    ReCalib_Step := 0;

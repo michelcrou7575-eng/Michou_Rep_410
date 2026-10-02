@@ -221,7 +221,29 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms FC155
 //     unchanged (a different, lower-severity failure mode - a garbled
 //     telegram, not a reading the scale itself is actively reporting as
 //     wrong/implausible).
-VERSION : 0.20
+//
+// v0.21 changes vs v0.20 - confirmed sentinel value + FC156 folded in,
+//   per Michou (2026-10-02):
+//   - "NegativeUnderScore_Value to -20663 is the INT the Scale gives
+//     when Negative Weight is computed! ... no more DINT/5222222!" -
+//     confirms -20663 is the real value (DB105 v0.12), not a test
+//     artifact as previously assumed. "Detect scale fault" moves from
+//     before "Store final weight" to after it, and now compares the
+//     truncated INT GrossWeight_Actual (==I) against
+//     NegativeUnderScore_Value directly, instead of the wide #IntPart
+//     DINT temp (==D) - the DINT/pre-truncation comparison was only
+//     ever needed because 5222222 didn't fit in 16-bit INT range;
+//     -20663 fits fine, so that complexity is gone. Sits right next to
+//     the "Platform weight sanity check" network (same reasoning, same
+//     alarm bit, same INT operand now).
+//   - FC156 "SCALE POWER-UP CALIBRATION" is deleted - per Michou: "FC155
+//     containes your FC156" - folded both of its networks ("Power-on +
+//     calibrate sequence", "Power-off sequence") in here verbatim,
+//     placed after "White lamps" (matching the position in Michou's own
+//     online FC155 rebuild, 2026-10-02). No logic change from FC156
+//     v0.3 - same DB105 state (ReCalib_Step/PowerOff_Step etc.) and
+//     "OUTPUTS DB".KILOTECK_Calib_K1/KILOTECK_Power_K2 targets.
+VERSION : 0.21
 
 
 VAR_TEMP
@@ -363,20 +385,22 @@ TITLE =Parse integer part, Byte_6 - field's last position, always a dig
       T     #IntPart; 
 
 NETWORK
-TITLE =Detect scale fault - raw parsed integer matches the scale's negative-value sentinel (latching)
-// Compares the wide #IntPart DINT temp, not GrossWeight_Actual - the
-// sentinel 5222222 doesn't fit in 16-bit INT range, so this must run
-// BEFORE #IntPart is truncated into the INT GrossWeight_Actual below.
-      L     #IntPart;
-      L     "GLUE SCALE CONTROL DB".NegativeUnderScore_Value;
-      ==D   ;
-      S     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
-
-NETWORK
 TITLE =Store final weight - Byte_8's decimal digit is discarded, INT resolution is 1kg
 
       L     #IntPart;
       T     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+
+NETWORK
+TITLE =Detect scale fault - GrossWeight_Actual matches the scale's negative-value sentinel (latching)
+// Confirmed by Michou: -20663 is the real INT value the KWS CY300
+// gives when its reading goes negative. Runs on the already-stored
+// INT GrossWeight_Actual (not the wide #IntPart DINT temp) - -20663
+// fits fine in 16-bit INT range, unlike the previously-assumed
+// 5222222, so there's no truncation-before-compare concern here.
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+      L     "GLUE SCALE CONTROL DB".NegativeUnderScore_Value;
+      ==I   ;
+      S     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
 
 NETWORK
 TITLE =Platform weight sanity check - GrossWeight_Actual must exceed the empty platform's own dead weight
@@ -595,6 +619,120 @@ WSCN: L     "GLUE SCALE CONTROL DB".LampScanStep;
       =     "OUTPUTS DB".WHT_SWL_3;
 
 WLDN: NOP   0;
+
+NETWORK
+TITLE =Power-on + calibrate sequence - K1 on for a flat 5s, K2 pulsed 0.5s inside that window
+// KWS CY300 power-up defect workaround (Michou, 2026-10-01/02): the
+// scale resets its zero/calibration reference every power-up. Closing
+// the calibration shunt (K1) BEFORE power-cycling the scale (K2) means
+// the scale sees the known shunt reference the moment it boots.
+// K2 is a momentary button-press simulation, not a plain on/off - a
+// SHORT 0.5s pulse powers the scale ON.
+//   ReCalib_Step: 0 idle, 1 K1 on/T53 (5s hold) started, 2 K2 0.5s
+//   pulse (T52), 3 waiting for T53 to elapse, 4 K1 off/done.
+// Ignored while PowerOff_Step is mid-sequence, so K1/K2 are never
+// driven by both sequences in the same scan.
+      A     "GLUE SCALE CONTROL DB".Scale_ReCalib_Req;
+      FP    "GLUE SCALE CONTROL DB".ReCalib_ReqMem;
+      JCN   RC_STP;
+
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     0;
+      <>I   ;
+      JC    RC_STP;
+      L     "GLUE SCALE CONTROL DB".PowerOff_Step;
+      L     0;
+      <>I   ;
+      JC    RC_STP;
+
+      L     1;
+      T     "GLUE SCALE CONTROL DB".ReCalib_Step;
+
+RC_STP: L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     1;
+      ==I   ;
+      JC    RC_S1;
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     2;
+      ==I   ;
+      JC    RC_S2;
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     3;
+      ==I   ;
+      JC    RC_S3;
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     4;
+      ==I   ;
+      JC    RC_S4;
+      JU    RC_DN;
+
+RC_S1: S     "OUTPUTS DB".KILOTECK_Calib_K1;
+      L     S5T#5S;
+      SD    T     53;
+      L     2;
+      T     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      JU    RC_DN;
+
+RC_S2: S     "OUTPUTS DB".KILOTECK_Power_K2;
+      L     S5T#500MS;
+      SD    T     52;
+      A     T     52;
+      JCN   RC_DN;
+      R     "OUTPUTS DB".KILOTECK_Power_K2;
+      R     T     52;
+      L     3;
+      T     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      JU    RC_DN;
+
+RC_S3: A     T     53;
+      JCN   RC_DN;
+      L     4;
+      T     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      JU    RC_DN;
+
+RC_S4: R     "OUTPUTS DB".KILOTECK_Calib_K1;
+      R     T     53;
+      L     0;
+      T     "GLUE SCALE CONTROL DB".ReCalib_Step;
+
+RC_DN: NOP   0;
+
+NETWORK
+TITLE =Power-off sequence - K2 pulsed on for 3s, no K1 involved
+// LONG 3s K2 pulse powers the scale OFF (Michou, 2026-10-02). Ignored
+// while ReCalib_Step is mid-sequence.
+      A     "GLUE SCALE CONTROL DB".Scale_PowerOff_Req;
+      FP    "GLUE SCALE CONTROL DB".PowerOff_ReqMem;
+      JCN   PO_STP;
+
+      L     "GLUE SCALE CONTROL DB".PowerOff_Step;
+      L     0;
+      <>I   ;
+      JC    PO_STP;
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     0;
+      <>I   ;
+      JC    PO_STP;
+
+      L     1;
+      T     "GLUE SCALE CONTROL DB".PowerOff_Step;
+
+PO_STP: L     "GLUE SCALE CONTROL DB".PowerOff_Step;
+      L     1;
+      ==I   ;
+      JCN   PO_DN;
+
+      S     "OUTPUTS DB".KILOTECK_Power_K2;
+      L     S5T#3S;
+      SD    T     54;
+      A     T     54;
+      JCN   PO_DN;
+      R     "OUTPUTS DB".KILOTECK_Power_K2;
+      R     T     54;
+      L     0;
+      T     "GLUE SCALE CONTROL DB".PowerOff_Step;
+
+PO_DN: NOP   0;
 
 NETWORK
 TITLE =Alarm lamps - RED_LED if any alarm latched, GRN_LED if none
