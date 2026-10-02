@@ -128,7 +128,63 @@ TITLE =Glue Scale Weight Control and Alarms  DB105
 //     either latched forces the pump off and keeps it off until
 //     Reset_Alarms clears it. Previously they only set their own alarm
 //     bits with no effect on pump operation.
-VERSION : 0.9
+//
+// v0.10 changes vs v0.9 - platform weight sanity check, per Michou
+//   (2026-10-02): the empty platform itself weighs at least ~30kg (its
+//   own structure/dead weight) - a GROSS reading below that (his
+//   examples: 0, or a corrupted negative value like -20663) means the
+//   reading itself can't be trusted, not a real underfill. NEW
+//   PlatformMinWeight_SP : INT (default 30) - FC155 now also latches
+//   Alarm_ScaleFault when GrossWeight_Actual falls below this, same
+//   bit/behavior as the existing 5222222-sentinel check (both mean "this
+//   weight reading is not real"). Kept as an internal constant, not
+//   bridged to "HMI DB" - it's the platform's own mechanical tare, not a
+//   per-job operator setpoint like Fill_Start/Stop; can be wired to HMI
+//   later if wanted. Also: Alarm_ScaleFault now forces Pump_ON off
+//   immediately (new unconditional interlock, FC155 v0.20) rather than
+//   just freezing it at its last commanded state - per Michou: "No Pump
+//   work!"
+//
+// v0.11 changes vs v0.10 - reconciled against Michou's own online
+//   rebuild (uploaded as root-level "DB105"/"FC155", 2026-10-02), which
+//   added FC156's power-on/calibrate sequencing state directly here
+//   (matching this repo's own v0.10-era design intent, just named
+//   differently) and a few other fields independently - merged, not
+//   overwritten:
+//   - NEW ReCalib_Step : INT, Scale_ReCalib_Req : BOOL, ReCalib_ReqMem :
+//     BOOL - FC156's power-on+calibrate sequencing state. Field name/
+//     bit-name choices (ReCalib_Step, Scale_ReCalib_Req) match exactly
+//     what Michou's own upload used; ReCalib_ReqMem (edge memory) is
+//     this repo's own addition, not in his upload. See FC156 v0.3.
+//   - NEW PowerOff_Step : INT, Scale_PowerOff_Req : BOOL,
+//     PowerOff_ReqMem : BOOL - the power-off sequence, per Michou's
+//     newer chat spec (2026-10-02, not yet in any upload): same naming
+//     pattern as the ReCalib_* fields above. See FC156 v0.3.
+//   - NEW Actual_Transfered_Weight : INT - appeared in his upload,
+//     declared but not wired to anything there either (FC155's "Compute
+//     weight..." network still only writes "HMI DB".
+//     Actual_Transfered_Weight, not this field) - carried forward as an
+//     unused/reserved field, same as every other appeared-online-first
+//     addition in this DB's history.
+//   - NEW Scale_PowerON_Pulse, Spare_11..Spare_15 : BOOL - appeared in
+//     his upload, also unreferenced anywhere - carried forward as
+//     spares, no confirmed intended behavior.
+//   - DROPPED SpareReal, SpareReal3 (his upload only kept SpareReal1/
+//     SpareReal2) - matches his own online edit; neither was ever wired
+//     to anything, so no behavior lost.
+//   - NOT adopted: his upload also redefined NegativeUnderScore_Value as
+//     INT := -20663 (was DINT := L#5222222) and retitled its check
+//     network "...matches the scale's -20663 Value" - this would
+//     silently stop catching the real, previously-confirmed 5222222
+//     sentinel telegram. Kept NegativeUnderScore_Value as-is (DINT,
+//     5222222, unchanged) - the new PlatformMinWeight_SP check (v0.10)
+//     already catches both his example bad values (0 and -20663, and
+//     anything else implausibly low) without needing a second exact
+//     magic-number match. If -20663 is actually a real observed scale
+//     telegram value (not a test/debug value), flag it back - the
+//     5222222 sentinel and PlatformMinWeight_SP range check can both
+//     stay in place alongside a third exact-match check if truly needed.
+VERSION : 0.11
 
   STRUCT
    GrossWeight_Actual : INT ;	//Parsed live weight from KWS CY300 scale (kg) - whole kg, scale's decimal digit is discarded (see FC155)
@@ -137,22 +193,34 @@ VERSION : 0.9
    Fill_Stop_SP : INT ;	//Operator-entered fill-stop weight (kg) - pump turns off at/above this - HMI writable
    AlarmLimit_Overfill_SP : INT ;	//Operator-entered max allowed weight (kg) - HMI writable - latching, interlocks Pump_ON off
    AlarmLimit_Underfill_SP : INT ;	//Operator-entered min allowed weight (kg) - HMI writable - latching, interlocks Pump_ON off
+   PlatformMinWeight_SP : INT ;	//NEW v0.10 - empty-platform dead weight (kg) - GrossWeight_Actual below this latches Alarm_ScaleFault (reading can't be trusted) - internal constant, not HMI-bridged
+   Actual_Transfered_Weight : INT ;	//NEW v0.11 - appeared online, not yet wired to anything (the live calc still only writes "HMI DB".Actual_Transfered_Weight, see FC155)
    NegativeUnderScore_Value : DINT ;	//Fixed sentinel value the KWS CY300 sends when its reading is negative (scale fault) - DINT, not INT: 5222222 doesn't fit in 16 bits - see FC155
    Hysteresis : INT ;	//Reserved - no longer read by FC155's pump-control network (see v0.3 changelog); kept for struct-layout compatibility
    LampScanStep : INT ;	//NEW v0.9 - current white-lamp scan index (1/2/3) while the pump runs - see FC155
-   SpareReal : REAL ;
+   ReCalib_Step : INT ;	//NEW v0.11 - FC156 power-on+calibrate sequence step, 0-4 - see FC156
+   PowerOff_Step : INT ;	//NEW v0.11 - FC156 power-off sequence step, 0-1 - see FC156
    SpareReal1 : REAL ;	//NEW v0.7 - appeared online, not yet wired to anything
    SpareReal2 : REAL ;	//NEW v0.7 - appeared online, not yet wired to anything
-   SpareReal3 : REAL ;	//NEW v0.7 - appeared online, not yet wired to anything
    Pump_ON : BOOL ;	//Output: TRUE = glue fill pump commanded on, filling in progress - mirrored onto "HMI DB".Glue_Fill_Pump_ON by FC155 (was Valve_Open)
    Alarm_Overfill : BOOL ;	//Output: TRUE = weight exceeded overfill limit (latching) - interlocks Pump_ON off, drives RED_LED
    Alarm_Underfill : BOOL ;	//Output: TRUE = weight below underfill limit at settle check (latching) - interlocks Pump_ON off, drives RED_LED
    ParseError : BOOL ;	//Output: TRUE = ASCII parse failed this scan (bad/garbled scale data)
    Pump_ON_Prev : BOOL ;	//Internal: previous scan Pump_ON state, for edge detection (was Valve_Open_Prev)
    Scale_Powered_On : BOOL ;	//Live Data Coming In - not yet wired by FC155
-   Alarm_ScaleFault : BOOL ;	//Output: TRUE = the scale's raw parsed integer matched NegativeUnderScore_Value this scan - scale reporting a negative/fault reading (latching) - drives RED_LED
+   Alarm_ScaleFault : BOOL ;	//Output: TRUE = the scale's raw parsed integer matched NegativeUnderScore_Value, OR GrossWeight_Actual fell below PlatformMinWeight_SP (latching) - the weight reading isn't trustworthy - drives RED_LED, forces Pump_ON off immediately
    Reset_Alarms : BOOL ;	//Input: HMI-driven, hold/pulse TRUE to clear Alarm_Overfill, Alarm_Underfill and Alarm_ScaleFault
    LampScanClockMem : BOOL ;	//NEW v0.9 - internal, one-scan-wide 500ms flasher pulse driving LampScanStep - see FC155
+   Scale_ReCalib_Req : BOOL ;	//NEW v0.11 - Input: HMI/manual, pulse or hold TRUE to start FC156's power-on + calibrate sequence
+   ReCalib_ReqMem : BOOL ;	//NEW v0.11 - Internal: edge memory for Scale_ReCalib_Req, see FC156
+   Scale_PowerOff_Req : BOOL ;	//NEW v0.11 - Input: HMI/manual, pulse or hold TRUE to start FC156's power-off sequence
+   PowerOff_ReqMem : BOOL ;	//NEW v0.11 - Internal: edge memory for Scale_PowerOff_Req, see FC156
+   Scale_PowerON_Pulse : BOOL ;	//NEW v0.11 - appeared online, not yet wired to anything, no confirmed intended behavior
+   Spare_11 : BOOL ;	//NEW v0.11 - appeared online, spare
+   Spare_12 : BOOL ;	//NEW v0.11 - appeared online, spare
+   Spare_13 : BOOL ;	//NEW v0.11 - appeared online, spare
+   Spare_14 : BOOL ;	//NEW v0.11 - appeared online, spare
+   Spare_15 : BOOL ;	//NEW v0.11 - appeared online, spare
   END_STRUCT ;
 BEGIN
    GrossWeight_Actual := 0;
@@ -161,13 +229,15 @@ BEGIN
    Fill_Stop_SP := 70;
    AlarmLimit_Overfill_SP := 80;
    AlarmLimit_Underfill_SP := 20;
+   PlatformMinWeight_SP := 30;
+   Actual_Transfered_Weight := 0;
    NegativeUnderScore_Value := L#5222222;
    Hysteresis := 2;
    LampScanStep := 1;
-   SpareReal := 0.0;
+   ReCalib_Step := 0;
+   PowerOff_Step := 0;
    SpareReal1 := 0.0;
    SpareReal2 := 0.0;
-   SpareReal3 := 0.0;
    Pump_ON := FALSE;
    Alarm_Overfill := FALSE;
    Alarm_Underfill := FALSE;
@@ -177,4 +247,14 @@ BEGIN
    Alarm_ScaleFault := FALSE;
    Reset_Alarms := FALSE;
    LampScanClockMem := FALSE;
+   Scale_ReCalib_Req := FALSE;
+   ReCalib_ReqMem := FALSE;
+   Scale_PowerOff_Req := FALSE;
+   PowerOff_ReqMem := FALSE;
+   Scale_PowerON_Pulse := FALSE;
+   Spare_11 := FALSE;
+   Spare_12 := FALSE;
+   Spare_13 := FALSE;
+   Spare_14 := FALSE;
+   Spare_15 := FALSE;
 END_DATA_BLOCK

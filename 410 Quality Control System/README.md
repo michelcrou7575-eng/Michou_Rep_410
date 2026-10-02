@@ -58,15 +58,26 @@ acting on a bad telegram.
 - **Alarm_Overfill**: latching, sets if `GrossWeight_Actual > AlarmLimit_Overfill_SP`.
 - **Alarm_Underfill**: 5 seconds after Pump_ON falls (timer T50), checks
   `GrossWeight_Actual < AlarmLimit_Underfill_SP` once at that instant; latching.
-- **Alarm_ScaleFault**: latching, sets if the raw parsed integer matches
-  `NegativeUnderScore_Value` (DINT, 5222222) — the KWS CY300's fixed
-  sentinel telegram (all 7 digits of the integer-part field, no leading
-  spaces) sent in place of a real reading when its measurement goes
-  negative. The comparison runs on the wide parse temp *before* it's
-  truncated into the INT `GrossWeight_Actual` — 5222222 doesn't fit in
-  16-bit INT range, so comparing the already-truncated value would never
-  match. Also gates pump/alarm updates the same way ParseError does, so
-  the pump doesn't react to the sentinel as if it were a weight.
+- **Alarm_ScaleFault**: latching, sets if either:
+  - the raw parsed integer matches `NegativeUnderScore_Value` (DINT,
+    5222222) — the KWS CY300's fixed sentinel telegram (all 7 digits of
+    the integer-part field, no leading spaces) sent in place of a real
+    reading when its measurement goes negative. The comparison runs on
+    the wide parse temp *before* it's truncated into the INT
+    `GrossWeight_Actual` — 5222222 doesn't fit in 16-bit INT range, so
+    comparing the already-truncated value would never match; or
+  - `GrossWeight_Actual < PlatformMinWeight_SP` (30kg) — the empty
+    platform's own dead weight, so a GROSS reading below that (0, or a
+    corrupted negative value — the Byte_0-5 parse loop doesn't validate
+    digit range, so a non-digit byte in a garbled telegram can genuinely
+    drive the parsed integer negative) means the reading can't be
+    trusted, not a real underfill.
+
+  Also gates pump/alarm updates the same way ParseError does (so the
+  pump doesn't react to a bad reading as if it were a real weight), and
+  additionally forces `Pump_ON` off immediately and unconditionally —
+  unlike ParseError, which only freezes the pump at its last commanded
+  state, a latched Alarm_ScaleFault is an active stop ("No Pump work!").
 - **Overfill/Underfill interlock**: while `Alarm_Overfill` OR
   `Alarm_Underfill` is latched, `Pump_ON` is forced off and held off (blocks
   automatic re-engagement) until `Reset_Alarms` clears the alarm.
@@ -88,8 +99,8 @@ commanded on — i.e. this tracks how much has been transferred since the
 pump last started, confirmed against the real pump-start event, not a
 free-running or reset-driven total.
 
-## Manual test and indicator lamps (all in "OUTPUTS DB", shared with other
-## subsystems — not tracked in this repo)
+## Manual test and indicator lamps (all in "OUTPUTS DB" / DB60, shared
+## with other subsystems — see `DB60_OUTPUTS_DB.awl`)
 
 - **Glue_Fill_Pump_Test** (`"HMI DB"`, manual HMI bit): overrides
   `Glue_Fill_Pump_ON` on regardless of `Pump_ON`'s automatic state — and
@@ -142,54 +153,90 @@ reordered. Since FC155/FC160 reference every field by symbol name (not raw
 offset), this is safe as long as both are recompiled together — already
 true, both were uploaded from the live, working PLC project.
 
-## Power-up calibration workaround (KWS CY300 defect, FC156 / DB60)
+## Power-up calibration workaround (KWS CY300 defect, FC156 / DB105 / "OUTPUTS DB")
 
 The KWS CY300 resets its zero/calibration reference on every power-up —
 a known hardware defect. Michou's workaround adds two relays, wired per
-his hand-drawn diagram (2026-10-01):
+his hand-drawn diagram (2026-10-01), onto two previously-unused bits of
+`"OUTPUTS DB"` (DB60 — the same shared output DB this block already uses
+for GRN_LED/RED_LED/WHT_SWL_1/2/3, now tracked in full as
+`DB60_OUTPUTS_DB.awl`):
 
 - **K1 "Calibration Relay"** — switches the load-cell S+/S- signal pair
   through a shunt-cal loop built into the scale. Coil on PLC terminal 40,
-  `"SCALE RELAYS DB".Calibration_Relay_K1` (DB60.DBX7.6).
+  `"OUTPUTS DB".KILOTECK_Calib_K1` (DB60.DBX7.6, was the placeholder
+  `Output_061`).
 - **K2 "Power Sw relay"** — bridges the scale's remote ON/OFF terminal to
   its Com terminal, i.e. energizing it is equivalent to pressing the
   scale's own power button. Coil on PLC terminal 39,
-  `"SCALE RELAYS DB".PowerSw_Relay_K2` (DB60.DBX7.7).
+  `"OUTPUTS DB".KILOTECK_Power_K2` (DB60.DBX7.7, was the placeholder
+  `Output_062`).
 
-`FC156 "SCALE POWER-UP CALIBRATION"` runs the exact sequence Michou
-specified (2026-10-01): on a `Recal_Request` rising edge (ignored if a
-sequence is already running), energize K1, pulse K2 on for 1s then
-release it (power-cycles the scale while the calibration shunt is
-already connected), wait 5s for the scale to boot/calibrate against the
-shunt, then release K1. State lives in DB60 (`Recal_Step` 0-4,
-`Recal_ReqMem` edge memory), using timers T52/T53 (confirmed unused
-elsewhere in the 410 project, same check as T50/T51).
+K2 is a momentary button-press simulation, not a plain on/off: per
+Michou (2026-10-02), a **short 0.5s pulse powers the scale ON**, a
+**long 3s pulse powers it OFF**.
 
-**Still open**: nothing calls FC156 yet (needs a `CALL` added to OB1,
-not tracked in this repo); `Recal_Request` isn't wired to an HMI button
-yet; DB60's `Reserved_Byte0-6` are padding, not a real export — if DB60
-already exists on the live PLC with other fields in use, replace them
-with a real capture before downloading this source.
+`FC156 "SCALE POWER-UP CALIBRATION"` runs two independent sequences,
+with sequencing state in DB105 ("GLUE SCALE CONTROL DB" — this
+subsystem's own state, not the shared output DB):
+
+- **Power-on + calibrate** (`Scale_ReCalib_Req` rising edge, ignored
+  while a power-off is mid-sequence): energize K1, hold it on for a flat
+  5s (`ReCalib_Step` 1→4), pulsing K2 on for 0.5s inside that same window
+  (started the same scan K1 turns on) to power the scale up while the
+  calibration shunt is already connected — the scale sees the known
+  shunt reference the moment it boots. K1 releases when the 5s elapses.
+- **Power-off** (`Scale_PowerOff_Req` rising edge, ignored while a
+  power-on/calibrate is mid-sequence): just a 3s K2 pulse
+  (`PowerOff_Step` 1→0), no K1 involved.
+
+Each sequence guards against starting while the other is running, so
+K1/K2 are never driven by both in the same scan. Timers: T52 (0.5s
+power-on pulse), T53 (5s K1 hold), T54 (3s power-off pulse) — confirmed
+unused elsewhere in the 410 project, same check as T50/T51.
+
+**Still open / flagged for confirmation**:
+- Nothing calls FC156 yet (needs a `CALL` added to OB1, not tracked in
+  this repo); `Scale_ReCalib_Req`/`Scale_PowerOff_Req` aren't wired to
+  HMI buttons yet.
+- Michou's own online FC155 rebuild (2026-10-02) references
+  `"OUTPUTS DB".WHT_SWL_1_Pnl`/`WHT_SWL_2_Pnl`/`WHT_SWL_3_Pnl`/
+  `RED_LED_Pnl`/`GRN_LED_Pnl` (a `_Pnl` suffix) instead of the plain
+  names this repo's FC155/DB60 use. The DB60 export this repo's
+  `DB60_OUTPUTS_DB.awl` is built from (2026-10-01) still has the plain
+  names, so that's what's tracked — if `_Pnl` is a real, intentional
+  rename, re-export DB60 and FC155's lamp/alarm networks need updating
+  together, or this won't compile.
+- That same upload also redefined `NegativeUnderScore_Value` as
+  `INT := -20663` and retitled its check "...matches the scale's -20663
+  Value" — NOT adopted here (see DB105 v0.11 changelog): kept the
+  original, previously-confirmed DINT/5222222 sentinel, since the new
+  `PlatformMinWeight_SP` check already catches -20663/0/any other
+  implausible low reading without it. Confirm whether -20663 is a real
+  observed scale telegram value or just a test/debug value, in case a
+  third exact-match check is actually wanted alongside the other two.
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.19. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.20. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), pump control with
-  overfill/underfill interlock, alarm latching and reset, HMI DB bridge
-  (setpoints, live weight, transfered-weight calc, bottomer-velocity
-  mirror, the real pump output), and lamp outputs (scan pattern + alarm
-  lamps). Originated as a STEP7 export of the live PLC's actual block —
-  logic was identical to the now-deleted FC104_GLUE_SCALE.awl v0.13 at
-  that point; FC104 was compiled, deployed, then renumbered FC104->FC155
-  and renamed "GLUE_SCALE" -> "GLUE SCALE LOGIC" on the real PLC project.
-  Later independently rebuilt online past v0.15 by Michou (Pump_ON
-  rename, transfered-weight tracking, HMI restructure) in parallel with
-  this repo's own v0.16/v0.17 — both reconciled together at v0.18/v0.19.
+  overfill/underfill interlock, platform-weight sanity check + scale-fault
+  pump interlock, alarm latching and reset, HMI DB bridge (setpoints, live
+  weight, transfered-weight calc, bottomer-velocity mirror, the real pump
+  output), and lamp outputs (scan pattern + alarm lamps). Originated as a
+  STEP7 export of the live PLC's actual block — logic was identical to
+  the now-deleted FC104_GLUE_SCALE.awl v0.13 at that point; FC104 was
+  compiled, deployed, then renumbered FC104->FC155 and renamed
+  "GLUE_SCALE" -> "GLUE SCALE LOGIC" on the real PLC project. Later
+  independently rebuilt online past v0.15 by Michou (Pump_ON rename,
+  transfered-weight tracking, HMI restructure) in parallel with this
+  repo's own v0.16/v0.17 — both reconciled together at v0.18/v0.19.
 - `DB4_ABC3000A_DB.awl` — 20-byte raw telegram buffer, filled by SFC14.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
-  limits, scale-fault sentinel, pump/alarm output bits, alarm reset, lamp
-  scan state. Version 0.9. Symbol is `"GLUE SCALE CONTROL DB"` (spaces)
-  to match what FC155 actually references.
+  limits, scale-fault sentinel, platform-weight sanity limit, pump/alarm
+  output bits, alarm reset, lamp scan state, FC156 sequencing state.
+  Version 0.11. Symbol is `"GLUE SCALE CONTROL DB"` (spaces) to match
+  what FC155 actually references.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.
 - `Anybus Communicator configuration *.conf` — exported gateway config;
@@ -197,13 +244,18 @@ with a real capture before downloading this source.
 - `HMI DB 10` — the HMI comms DB (DB10), version 0.3, owned by FC160,
   not this project's source of truth. Referenced here because FC155's
   HMI bridge (above) reads/writes several of its fields by symbol name.
-- `FC156 SCALE POWER-UP CALIBRATION` — NEW, version 0.1. Runs the KWS
-  CY300 power-up calibration workaround (K1/K2 relay sequence) — see
-  "Power-up calibration workaround" above.
-- `DB60_SCALE_RELAYS_DB.awl` — NEW, version 0.1. `"SCALE RELAYS DB"`,
-  holds the K1/K2 relay output bits and FC156's sequencing state. Bytes
-  0-6 are reserved padding, not a real online export — see that file's
-  own header.
+- `FC156 SCALE POWER-UP CALIBRATION` — version 0.3. Runs the KWS CY300
+  power-on+calibrate and power-off relay sequences — see "Power-up
+  calibration workaround" above.
+- `DB60_OUTPUTS_DB.awl` — version 0.1. `"OUTPUTS DB"`, the real shared
+  output DB (DB60) — GRN_LED/RED_LED/WHT_SWL_1/2/3 (already referenced
+  by FC155), the new KILOTECK_Calib_K1/KILOTECK_Power_K2 relay bits, and
+  every other output used by other 410 subsystems (tower lamps,
+  Seam_Ctrl_*, etc.), tracked verbatim. Not this subsystem's own DB —
+  shared, so most of its fields aren't glue-scale-related.
+- `DB61_INPUTS_DB.awl` — version 0.1. `"INPUTS DB"` (DB61), the shared
+  input DB, tracked verbatim. Not touched by the glue-scale/KWS CY300
+  work — included for completeness since it was shared alongside DB60.
 
 ## Still open
 
@@ -213,11 +265,19 @@ with a real capture before downloading this source.
   hand-traced but not bench-verified — confirm the 500ms period and
   on/off behavior on real hardware.
 - Confirm T50 and T51 aren't used elsewhere in the 410 project.
-- `Hysteresis`, `SpareReal`/`SpareReal1`/`SpareReal2`/`SpareReal3`, and
-  `Scale_Powered_On` exist in DB105 but aren't wired to anything in FC155
-  yet — no confirmed intended behavior for any of them.
+- `Hysteresis`, `SpareReal1`/`SpareReal2`, `Scale_Powered_On`,
+  `Actual_Transfered_Weight` (the DB105 copy), `Scale_PowerON_Pulse` and
+  `Spare_11..Spare_15` exist in DB105 but aren't wired to anything in
+  FC155/FC156 yet — no confirmed intended behavior for any of them.
 - The touch panel's own screen project needs its tags re-pointed to
   match `"HMI DB"` v0.3's restructured offsets — outside this repo, can't
   be done from here.
 - FC156 isn't called from anywhere yet (needs adding to OB1) and its
-  `Recal_Request` trigger isn't wired to an HMI button.
+  `Scale_ReCalib_Req`/`Scale_PowerOff_Req` triggers aren't wired to HMI
+  buttons.
+- `PlatformMinWeight_SP` (30kg) is a best-guess default from Michou's
+  "Platform free weight" description — confirm against the actual empty
+  platform reading before relying on it to gate the pump.
+- The `_Pnl` lamp-symbol suffix and the `NegativeUnderScore_Value`
+  -20663 question (both from Michou's 2026-10-02 FC155/DB105 upload,
+  neither adopted here) — see "Power-up calibration workaround" above.

@@ -193,7 +193,35 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Valve Control, Alarms FC155
 //     spec only named Overfill/Underfill for RED_LED and "no alarm" for
 //     GRN_LED - ScaleFault was folded into both here so GRN's "no
 //     alarm" claim stays true; flag if that's wrong.
-VERSION : 0.19
+//
+// v0.20 changes vs v0.19 - platform weight sanity check + scale-fault
+//   pump interlock, per Michou (2026-10-02, see DB105 v0.10):
+//   - NEW network "Platform weight sanity check", placed right after
+//     "Store final weight" (reads the just-stored GrossWeight_Actual):
+//     the empty platform itself weighs at least PlatformMinWeight_SP
+//     (30kg) - a reading below that (Michou's examples: 0, or a
+//     corrupted negative value like -20663, both of which a garbled
+//     telegram can genuinely produce - the Byte_0-5 parse loop doesn't
+//     validate digit range, so a non-digit byte can drive #IntPart
+//     negative) means the reading itself is bad, not a real underfill.
+//     Latches Alarm_ScaleFault - same bit as the existing
+//     5222222-sentinel check, both mean "this weight reading can't be
+//     trusted," not two separate alarms.
+//   - NEW network "Scale-fault interlock", placed after "Reset latched
+//     alarms" (so a same-scan Reset_Alarms clear is seen first, not
+//     fought) - forces Pump_ON off immediately whenever Alarm_ScaleFault
+//     is latched, unconditionally (outside the ParseError/Alarm_ScaleFault
+//     SKIP gate, same as "Reset latched alarms" itself). Previously a
+//     scale fault only skipped the pump-control network, which FROZE
+//     Pump_ON at whatever it was last commanded to - if the pump
+//     happened to be running the instant the fault hit, it would have
+//     stayed running indefinitely. Per Michou: "No Pump work!" - this
+//     is an active stop, not a frozen hold. Scoped to Alarm_ScaleFault
+//     only; ParseError's existing freeze-last-state behavior is
+//     unchanged (a different, lower-severity failure mode - a garbled
+//     telegram, not a reading the scale itself is actively reporting as
+//     wrong/implausible).
+VERSION : 0.20
 
 
 VAR_TEMP
@@ -351,6 +379,18 @@ TITLE =Store final weight - Byte_8's decimal digit is discarded, INT resolution 
       T     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
 
 NETWORK
+TITLE =Platform weight sanity check - GrossWeight_Actual must exceed the empty platform's own dead weight
+// The platform itself (nothing on it) weighs at least PlatformMinWeight_SP
+// (30kg) - a GROSS reading below that is implausible (0, or a corrupted
+// negative value) and means the reading can't be trusted, not a real
+// underfill. Same alarm bit as the sentinel check above - both mean
+// "this weight reading is not real."
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+      L     "GLUE SCALE CONTROL DB".PlatformMinWeight_SP;
+      <I    ;
+      S     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
+
+NETWORK
 TITLE =Mirror parsed weight -> HMI DB (unconditional, for display)
 
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
@@ -450,6 +490,15 @@ TITLE =Reset latched alarms - HMI-driven, runs regardless of this scan'
       R     "GLUE SCALE CONTROL DB".Alarm_Overfill;
       R     "GLUE SCALE CONTROL DB".Alarm_Underfill;
       R     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
+
+NETWORK
+TITLE =Scale-fault interlock - force the pump off immediately, not just a frozen last-state hold
+// Runs after the reset network above so a same-scan Reset_Alarms clear
+// is already reflected here. Unconditional (outside the ParseError/
+// Alarm_ScaleFault SKIP gate) - per Michou: "No Pump work!" while the
+// scale's reading can't be trusted.
+      A     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
+      R     "GLUE SCALE CONTROL DB".Pump_ON;
 
 NETWORK
 TITLE =Drive physical glue pump output - automatic Pump_ON, Glue_Fill_Pump_Test overrides it on
