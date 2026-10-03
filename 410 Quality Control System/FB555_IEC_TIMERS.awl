@@ -20,7 +20,18 @@ TITLE =IEC Timers
 //   fresh every scan - see that file's own v0.26/v0.27 changelog for
 //   why SFB4-family timers need to be called every scan, not just once
 //   per state-machine step).
-VERSION : 0.2
+//
+// v0.3 - comment-only, no code change: FC155 v0.28 corrected the
+//   power-on/calibration sequence (Michou, 2026-10-03 - K1+K2 now start
+//   simultaneously as "Process ON", 5s K2-alone power-off, new 3s dwell
+//   wait) and, as part of that, repurposes the TON_PWR_ON instance
+//   (PWRON_IN/PWRON_IN_TIME/PWRON_OUT) as the new 3s dwell-wait timer -
+//   it's no longer a standalone "power the scale on" pulse, since
+//   Scale_PowerON_Pulse now runs the shared "Process ON" step instead.
+//   No interface change here was needed for that - FC155 just feeds
+//   different IN/PT values into the same PWRON_IN/PWRON_IN_TIME slot.
+//   See FC155's own changelog for the full reasoning.
+VERSION : 0.3
 
 
 VAR_INPUT

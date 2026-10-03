@@ -236,44 +236,50 @@ FC156"):
   `"OUTPUTS DB".KILOTECK_Power_K2` (DB60.DBX7.7, was the placeholder
   `Output_062`).
 
-K2 is a momentary button-press simulation, not a plain on/off: per
-Michou (2026-10-02), a **short 0.5s pulse powers the scale ON**, a
-**long 3s pulse powers it OFF**.
+K2 is a momentary button-press simulation, not a plain on/off.
 
-FC155 runs three independent sequences, with sequencing state in DB105
-("GLUE SCALE CONTROL DB" — this subsystem's own state, not the shared
-output DB) and timing via **FB555 "IEC_TIMERS"** (Michou's design,
+FC155 runs timing via **FB555 "IEC_TIMERS"** (Michou's design,
 2026-10-03) — one wrapper FB holding all 7 timers as multi-instance
 `"TON"` (library FB) children, called **once per scan** with one
 instance DB, `"IEC_TIMERS_DB"` (DB106). See `FB555_IEC_TIMERS.awl` and
-"S7-300 STL hard limits" above for why a library FB instead of SFB4:
+"S7-300 STL hard limits" above for why a library FB instead of SFB4.
+Sequencing state lives in DB105 ("GLUE SCALE CONTROL DB" — this
+subsystem's own state, not the shared output DB), specifically
+`ReCalib_Step`.
 
-- **Power-on + calibrate** (`Scale_ReCalib_Req` rising edge, ignored
-  while already running): recalibrating needs a full power cycle, not
-  just toggling K1 while the scale is already running — so this first
-  pulses K2 for 3s to power the scale OFF (`ReCalib_Step` 1, FB555's
-  `RC_K2OFF_IN`/`RC_K2OFF_OUT`), then energizes K1, holds it on for a
-  flat 5s (`ReCalib_Step` 2→5, `RC_K1HOLD_IN`/`RC_K1HOLD_OUT`), pulsing
-  K2 on for 0.5s inside that same window (`RC_K2ON_IN`/`RC_K2ON_OUT`)
-  to power the scale back up while the calibration shunt is already
-  connected — the scale sees the known shunt reference the moment it
-  boots. K1 releases when the 5s elapses. The only one of the three
-  with multi-step state (`ReCalib_Step`); the *start* edge is detected
-  via raw symbol `"FP 201.1"`, but once running, every one of FB555's
-  7 `IN` parameters is recomputed and the whole FB `CALL`ed every scan
-  regardless of which step is active (see "Timers" network) — this is
-  the part a classical-timer "fire once, check back later" design
-  can't do.
-- **Manual power-off pulse** (`Scale_PowerOFF_Pulse`, ignored while
-  `ReCalib_Step` is mid-sequence): a single 3s K2 pulse
-  (`PWROFF_IN`/`PWROFF_OUT`), no K1 involved. No step counter — gated
-  directly on the bit's own level; auto-clears the bit when the pulse
-  completes.
-- **Manual power-on pulse** (`Scale_PowerON_Pulse`, same guard/idiom):
-  a single 500ms K2 pulse (`PWRON_IN`/`PWRON_OUT`), auto-clears when
-  done.
+**"Process ON"** is the core building block (Michou, 2026-10-03,
+correcting an earlier wrong design where K1 started before K2): **K1
+and K2 start simultaneously** — K2 pulses 0.5s
+(`RC_K2ON_IN`/`RC_K2ON_OUT`), K1 stays on for a flat 5s
+(`RC_K1HOLD_IN`/`RC_K1HOLD_OUT`, started the same step as K2's pulse).
+Two things trigger it:
 
-Each sequence guards against starting while another is mid-run, so
+- **Full recalibration** (`Scale_ReCalib_Req` rising edge, detected via
+  raw symbol `"FP 201.1"`, ignored while already running):
+  recalibrating needs a full power cycle first, so this sequence is
+  `ReCalib_Step` 1→5 — **1**: K2 **alone** (no K1) for **5s**, power
+  off (`RC_K2OFF_IN`/`RC_K2OFF_OUT`); **2**: a 3s dwell with nothing
+  active (repurposes FB555's `PWRON_IN`/`PWRON_IN_TIME`/`PWRON_OUT`
+  slot — see below); **3**: Process ON starts (K1+K2 together); **4**:
+  waiting for K1's 5s hold (started in step 3) to elapse; **5**: K1
+  releases, done. Once running, every one of FB555's 7 `IN` parameters
+  is recomputed and the whole FB `CALL`ed every scan regardless of
+  which step is active (see "Timers" network) — this is the part a
+  classical-timer "fire once, check back later" design can't do.
+- **Standalone manual power-on** (`Scale_PowerON_Pulse`, ignored while
+  `ReCalib_Step` is mid-sequence): enters the *same* state machine
+  directly at step 3 — "run Process ON standalone," skipping the
+  power-off+wait. Auto-clears `Scale_PowerON_Pulse` when step 5
+  completes, same self-clearing idiom as the manual pulses below.
+
+**Manual power-off pulse** (`Scale_PowerOFF_Pulse`, ignored while
+`ReCalib_Step` is mid-sequence) is fully independent of all of the
+above: a single 3s K2 pulse (`PWROFF_IN`/`PWROFF_OUT`), no K1 involved,
+no step counter — gated directly on the bit's own level; auto-clears
+when the pulse completes. Michou didn't ask for this one to change, so
+it's untouched by the "Process ON" correction.
+
+Every sequence guards against starting while another is mid-run, so
 K1/K2 are never driven by more than one action in the same scan.
 FB555's other two timers, `LAMP_IN`/`LAMP_OUT` and
 `UNDERFILL_IN`/`UNDERFILL_OUT`, cover the lamp-scan flasher and the
@@ -291,11 +297,17 @@ block number picked this session.
   (`RED_LED_Pnl`/`GRN_LED_Pnl` by a real compile error; `WHT_SWL_1/2/3_Pnl`
   by Michou's next working online version using them) — FC155 v0.25,
   DB60 v0.3.
-- The IEC-timer migration (v0.26/v0.27, FB555) is a from-scratch
-  design, not yet bench verified on real hardware — confirm each
-  timer's behavior (especially the self-oscillating lamp-scan flasher
-  and the 5s K1 hold, the two most structurally different from before)
-  before trusting it in production.
+- The "Process ON" sequence (v0.28) is a fresh correction, not yet
+  confirmed on real hardware against Michou's exact intent — in
+  particular, whether `Scale_PowerOFF_Pulse`'s standalone 3s power-off
+  duration should also become 5s to match the recalibration's power-off
+  step (Michou's message specifically said "K2 alone 5sec" in the
+  recalibration context; the standalone manual power-off wasn't
+  mentioned, so it was left at 3s — flag if that's wrong).
+- The IEC-timer migration (v0.26/v0.27, FB555) overall is still not
+  bench-verified beyond "it compiles and the PLC runs it" — confirm
+  the self-oscillating lamp-scan flasher's actual timing on real
+  hardware.
 - FB555 and DB106 need confirming as genuinely free block numbers on
   the live PLC before download — this repo can't see the whole project.
 - The "Update" network (`#UPDATE` := rising edge of `"M 6.7"`) now gates
@@ -309,7 +321,7 @@ block number picked this session.
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.27. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.28. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), pump control with
   overfill/underfill interlock, platform-weight sanity check + scale-fault
   pump interlock, alarm latching and reset, HMI DB bridge (setpoints, live
@@ -323,7 +335,7 @@ block number picked this session.
   then renumbered FC104->FC155 and renamed "GLUE_SCALE" -> "GLUE SCALE
   LOGIC" on the real PLC project. Repeatedly reconciled against Michou's
   own parallel online rebuilds.
-- `FB555_IEC_TIMERS.awl` — version 0.2. Michou's design: one wrapper FB
+- `FB555_IEC_TIMERS.awl` — version 0.3. Michou's design: one wrapper FB
   holding all 7 timers FC155 needs (underfill settle, lamp-scan
   flasher, and the 5 power-sequence timers) as multi-instance `"TON"`
   (the imported IEC Timer library FB) children, called once per scan
@@ -339,7 +351,7 @@ block number picked this session.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
   limits, scale-fault sentinel, platform-weight sanity limit, pump/alarm
   output bits, alarm reset, lamp scan state, power-on/power-off
-  sequencing state. Version 0.15. Symbol is `"GLUE SCALE CONTROL DB"`
+  sequencing state. Version 0.16. Symbol is `"GLUE SCALE CONTROL DB"`
   (spaces) to match what FC155 actually references.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.

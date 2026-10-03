@@ -27,7 +27,13 @@ TITLE =Glue Scale Weight Control and Alarms  DB105
 //   PlatformMinWeight_SP moved + gained an inline default, SpareReal1
 //   dropped (SpareReal2 remains) + NEW Spare_INT, GrossWeight_Actual's
 //   initial value is -20663 (deliberate test-state default).
-VERSION : 0.15
+// v0.16 - comment-only: ReCalib_Step's field comment still described
+//   FC156's original (and already-superseded) 4-step sequence. Updated
+//   to match FC155 v0.28's corrected "Process ON" sequence (K1+K2
+//   simultaneous, 5s K2-alone power-off, 3s dwell wait) - see that
+//   file's own changelog for the full reasoning. No struct/field
+//   changes.
+VERSION : 0.16
 
  STRUCT
    GrossWeight_Actual : INT ;	//Parsed live weight from KWS CY300 scale (kg) - whole kg, scale's decimal digit 
@@ -40,7 +46,7 @@ VERSION : 0.15
    NegativeUnderScore_Value : INT ;	//Fixed sentinel value the KWS CY300 sends when its reading is negative (scale fa
    Hysteresis : INT ;	//Reserved - no longer read by FC155's pump-control network (see v0.3 changelog);
    LampScanStep : INT ;	//NEW v0.9 - current white-lamp scan index (1/2/3) while the pump runs - see FC15
-   ReCalib_Step : INT ;	//FC156 sequence step - 0 idle, 1 K1 on, 2 K2 1s pulse, 3 5s wait, 4 K1 off
+   ReCalib_Step : INT ;	//FC155 sequence step - 0 idle, 1 K2-alone 5s power-off, 2 3s dwell wait, 3 Process ON (K1+K2 start together), 4 waiting for K1's 5s hold, 5 K1 off/done
    PlatformMinWeight_SP : INT  := 30;	//Scale Platform Min Weight SP 30 [Kg]
    Spare_INT : INT ;	
    SpareReal2 : REAL ;	
@@ -55,7 +61,7 @@ VERSION : 0.15
    LampScanClockMem : BOOL ;	//NEW v0.9 - internal, one-scan-wide 500ms flasher pulse driving LampScanStep - s
    Scale_PowerOFF_Pulse : BOOL ;	//Scale Power-Off Process (Power Hold 3s)
    Scale_ReCalib_Req : BOOL ;	//Start the Power-Off calibration sequence (Power Hold 3s)
-   Scale_PowerON_Pulse : BOOL ;	//Scale Power-On Process (Power Hold 500mS)
+   Scale_PowerON_Pulse : BOOL ;	//Input: HMI/manual, pulse or hold TRUE to run "Process ON" standalone (K1+K2 together, see ReCalib_Step/FC155) - enters the same ReCalib_Step sequence directly at step 3, auto-clears when done
    Spare_11 : BOOL ;	
    Spare_12 : BOOL ;	
    Spare_13 : BOOL ;	
