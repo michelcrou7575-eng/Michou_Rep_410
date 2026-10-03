@@ -1,0 +1,10 @@
+DATA_BLOCK "IEC_TIMERS_DB"
+FB       555
+// v0.1 - NEW instance DB for FB555 "IEC_TIMERS" (Michou's multi-instance
+//   wrapper FB, replacing the earlier 7 separate top-level SFB4 instance
+//   DBs - see FB555_IEC_TIMERS.awl's own header). Called once per scan
+//   from FC155 - see that file's "Timers" network. DB number reuses 106
+//   (freed by deleting the old DB106_TON_UNDERFILL.awl single-instance
+//   design) rather than claiming a fresh number.
+BEGIN
+END_DATA_BLOCK

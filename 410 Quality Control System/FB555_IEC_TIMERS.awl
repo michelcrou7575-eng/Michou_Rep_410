@@ -1,0 +1,99 @@
+FUNCTION_BLOCK "IEC_TIMERS"
+TITLE =IEC Timers
+// v0.2 - Michou's own design (2026-10-03), per his question "Instead of
+//   an FC, why not call all SFB4 inside an FB (with it's own instance
+//   db) then call it once in FC155?" - wraps every timer FC155 needs as
+//   a multi-instance child of this ONE FB, called once with ONE
+//   instance DB, instead of 7 separate top-level instance DBs. Each
+//   timer is "TON" - the IEC Timer library FB Michou imported into this
+//   project from the Standard Library ("IEC Function Blocks") after
+//   SFB4 failed to resolve on this CPU (compile log, 2026-10-02:
+//   "Symbol PT not found in symbol table" etc. for every SFB4 call -
+//   SFB2/3/4 aren't firmware-native on every S7-300 CPU, this one
+//   needed the library FB instead). Assigned block number FB555 per
+//   Michou.
+//   Fixed one bug in the pasted version: TON_UNDERFILL's PT was wired
+//   to #LAMP_IN_TIME (copy-paste leftover from the TON_LAMPSCAN call
+//   above it) instead of #UNDERFILL_IN_TIME - would have given the
+//   underfill settle timer a 500ms preset instead of 5s. See FC155
+//   v0.27 for how this FB is called (every IN/PT computed and passed
+//   fresh every scan - see that file's own v0.26/v0.27 changelog for
+//   why SFB4-family timers need to be called every scan, not just once
+//   per state-machine step).
+VERSION : 0.2
+
+
+VAR_INPUT
+  LAMP_IN : BOOL ;
+  LAMP_IN_TIME : TIME ;
+  UNDERFILL_IN : BOOL ;
+  UNDERFILL_IN_TIME : TIME ;
+  RC_K2OFF_IN : BOOL ;
+  RC_K2OFF_IN_TIME : TIME ;
+  RC_K1HOLD_IN : BOOL ;
+  RC_K1HOLD_IN_TIME : TIME ;
+  RC_K2ON_IN : BOOL ;
+  RC_K2ON_IN_TIME : TIME ;
+  PWRON_IN : BOOL ;
+  PWRON_IN_TIME : TIME ;
+  PWROFF_IN : BOOL ;
+  PWROFF_IN_TIME : TIME ;
+END_VAR
+VAR_OUTPUT
+  LAMP_OUT : BOOL ;
+  UNDERFILL_OUT : BOOL ;
+  RC_K2OFF_OUT : BOOL ;
+  RC_K1HOLD_OUT : BOOL ;
+  RC_K2ON_OUT : BOOL ;
+  PWRON_OUT : BOOL ;
+  PWROFF_OUT : BOOL ;
+END_VAR
+VAR
+  TON_UNDERFILL : "TON";
+  TON_LAMPSCAN : "TON";
+  TON_RC_K1HOLD : "TON";
+  TON_RC_K2ON : "TON";
+  TON_PWR_ON : "TON";
+  TON_RC_K2OFF : "TON";
+  TON_PWR_OFF : "TON";
+END_VAR
+BEGIN
+NETWORK
+TITLE =Timers
+
+      CALL #TON_LAMPSCAN (
+           IN                       := #LAMP_IN,
+           PT                       := #LAMP_IN_TIME,
+           Q                        := #LAMP_OUT);
+
+      CALL #TON_UNDERFILL (
+           IN                       := #UNDERFILL_IN,
+           PT                       := #UNDERFILL_IN_TIME,
+           Q                        := #UNDERFILL_OUT);
+
+      CALL #TON_RC_K2OFF (
+           IN                       := #RC_K2OFF_IN,
+           PT                       := #RC_K2OFF_IN_TIME,
+           Q                        := #RC_K2OFF_OUT);
+
+      CALL #TON_RC_K1HOLD (
+           IN                       := #RC_K1HOLD_IN,
+           PT                       := #RC_K1HOLD_IN_TIME,
+           Q                        := #RC_K1HOLD_OUT);
+
+      CALL #TON_RC_K2ON (
+           IN                       := #RC_K2ON_IN,
+           PT                       := #RC_K2ON_IN_TIME,
+           Q                        := #RC_K2ON_OUT);
+
+      CALL #TON_PWR_ON (
+           IN                       := #PWRON_IN,
+           PT                       := #PWRON_IN_TIME,
+           Q                        := #PWRON_OUT);
+
+      CALL #TON_PWR_OFF (
+           IN                       := #PWROFF_IN,
+           PT                       := #PWROFF_IN_TIME,
+           Q                        := #PWROFF_OUT);
+
+END_FUNCTION_BLOCK

@@ -24,51 +24,37 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Pump Control, Alarms, KWS CY300 power/c
 //   LSRS); adopted Michou's VAR_TEMP renames, "Update" network, and
 //   WHT_SWL_1/2/3 -> _Pnl.
 //
-// v0.26 changes vs v0.25 - switched every classical timer (SD/T-number)
-//   to SFB4 (IEC TON), per Michou: "Timers don't start!!! What about
-//   using SFB4 instead?" Two real things were wrong, not one:
-//   - "SD" is the mnemonic for S_ODT, the NON-retentive on-delay timer -
-//     this project's own comments (mine) wrongly called it "the stored
-//     timer" all session. The actual stored/retentive one is "SS"
-//     (S_ODTS). This alone would explain some failures (T50's settle
-//     timer, enabled by only a one-scan pulse, would reset itself the
-//     very next scan under non-retentive semantics).
-//   - SFB4/TON is call-driven, not hardware-autonomous like classical
-//     S5 timers: it only advances its elapsed time while its CALL
-//     instruction executes that scan with IN=1. A classical timer, once
-//     started, keeps counting in dedicated hardware whether or not the
-//     program revisits the starting instruction - an SFB does NOT. The
-//     old "start once in one step, check again two steps later" pattern
-//     (T53, the 5s K1 hold) would NOT work with a naive SD->CALL swap
-//     for this reason.
-//   - Fix: ONE new network, "Timers (SFB4)", computes every timer's IN
-//     condition fresh and CALLs all 7 SFB4 instances unconditionally,
-//     every single scan, regardless of which step/state is active. Each
-//     instance DB's own IN condition (not the old RLO-chain/edge tricks)
-//     now fully determines start/hold/reset - TON resets itself to 0 the
-//     instant IN goes false, so no explicit timer reset instruction is
-//     needed anywhere downstream anymore.
-//   - 7 new instance DBs (SFB4 needs one per usage - FC155 is a FUNCTION,
-//     it has no static memory of its own to hold instance data):
-//     DB106 "TON_UNDERFILL" (was T50), DB107 "TON_LAMPSCAN" (was T51,
-//     now self-oscillating via IN := Pump_ON AND NOT its own Q),
-//     DB108 "TON_RC_K2ON" (was T52), DB109 "TON_RC_K1HOLD" (was T53,
-//     IN := ReCalib_Step 2-4 inclusive, the one that most needed the
-//     "call every scan" fix), DB110 "TON_RC_K2OFF" (was T54),
-//     DB111 "TON_PWR_ON" (was T55), DB112 "TON_PWR_OFF" (was T56).
-//     DB numbers are a best guess, free within this repo's own tracked
-//     files only - not independently confirmed against the live
-//     project's full block list (same unresolved caution as T52-T56).
-//   - Downstream networks simplified: no more SD/L-preset/explicit R -
-//     just read "<instance>".Q where the old "A Tnn"/"A 'Timer nn'"
-//     checks were. Underfill's old falling-edge-latch network is gone
-//     entirely (TON_UNDERFILL's IN := NOT Pump_ON directly, continuous,
-//     no edge detection needed) - Pump_ON_Prev is no longer written by
-//     this block (DB105 field left declared, now unused, not removed).
-//     Lamp scan step's LSRS no longer needs SET;/R - LampScanClockMem is
-//     now purely mirrored from TON_LAMPSCAN.Q, which self-clears once
-//     Pump_ON goes false.
-VERSION : 0.26
+// v0.26: switched every classical timer (SD/T-number) to SFB4 (IEC
+//   TON), per Michou: "Timers don't start!!! What about using SFB4
+//   instead?" Two real bugs: (1) "SD" is S_ODT, the NON-retentive
+//   on-delay - this project's comments wrongly called it "stored" all
+//   session; the real stored one is "SS". (2) SFB-family timers are
+//   call-driven, not hardware-autonomous like classical S5 timers - they
+//   only advance while their CALL executes that scan with IN=1, so a
+//   "start once, check two steps later" pattern (the old T53/K1 hold)
+//   silently stalls. Fix: one "Timers" network computes every timer's IN
+//   fresh and CALLs every instance unconditionally, every scan,
+//   regardless of which step is active - still true in v0.27 below.
+//   7 separate top-level SFB4 instance DBs (DB106-DB112) at this point.
+//
+// v0.27 changes vs v0.26 - SFB4 itself failed to resolve on this CPU
+//   (compile log, 2026-10-02: "Symbol PT not found in symbol table" /
+//   "FB requires the specification of an instance DB" for every SFB4
+//   call - SFB2/3/4 aren't firmware-native on every S7-300 CPU; this one
+//   needs the IEC Timer library FB instead, which Michou imported as
+//   "TON"). Per Michou's own design ("why not call all SFB4 inside an FB
+//   with it's own instance db, then call it once in FC155?"): replaced
+//   the 7 top-level instance DBs with FB555_IEC_TIMERS.awl, one FB that
+//   wraps all 7 "TON" calls as multi-instance children, called ONCE here
+//   with one instance DB (DB106 "IEC_TIMERS_DB", reusing the number the
+//   old TON_UNDERFILL DB freed up). Same "call every scan, IN recomputed
+//   fresh" logic as v0.26, just targeting one CALL instead of 7; reads
+//   "IEC_TIMERS_DB".<name>_OUT downstream instead of "<instance>".Q.
+//   Caught and fixed one bug while integrating: FB555's own
+//   TON_UNDERFILL call had PT wired to #LAMP_IN_TIME (copy-paste
+//   leftover) instead of #UNDERFILL_IN_TIME - see that file's own
+//   changelog.
+VERSION : 0.27
 
 
 VAR_TEMP
@@ -116,36 +102,27 @@ TITLE =Update
       =     #UPDATE;
 
 NETWORK
-TITLE =Timers (SFB4/TON) - compute each IN condition, CALL every instance every scan
-// SFB4 is call-driven, not hardware-autonomous: it only advances while
-// its CALL executes with IN=1, and that CALL must happen every scan for
-// the whole duration being timed - see v0.26 changelog above. Every
-// timer in this block is therefore CALLed here, unconditionally, every
-// scan, with IN recomputed fresh each time - never gated inside a
-// once-per-step block downstream.
+TITLE =Timers - compute each IN condition, CALL FB555 "IEC_TIMERS" once, every scan
+// FB555 "IEC_TIMERS" (Michou's design, 2026-10-03) wraps all 7 timers
+// as multi-instance children of one FB, called once here with one
+// instance DB - replacing the earlier design of 7 separate top-level
+// SFB4 instance DBs. Each timer is the "TON" library FB (imported from
+// the Standard Library after SFB4 failed to resolve on this CPU - see
+// v0.26 changelog). Still call-driven, not hardware-autonomous (same
+// reasoning as v0.26): every IN condition is recomputed and the whole
+// FB is CALLed unconditionally, every scan, regardless of which step is
+// active - never gated inside a once-per-step block downstream.
       AN    "GLUE SCALE CONTROL DB".Pump_ON;
       =     #UNDERFILL_IN;
 
-      CALL SFB  4 , "TON_UNDERFILL"
-           IN  := #UNDERFILL_IN,
-           PT  := T#5S;
-
       A     "GLUE SCALE CONTROL DB".Pump_ON;
-      AN    "TON_LAMPSCAN".Q;
+      AN    "IEC_TIMERS_DB".LAMP_OUT;
       =     #LAMP_IN;
-
-      CALL SFB  4 , "TON_LAMPSCAN"
-           IN  := #LAMP_IN,
-           PT  := T#500MS;
 
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     1;
       ==I   ;
       =     #RC_K2OFF_IN;
-
-      CALL SFB  4 , "TON_RC_K2OFF"
-           IN  := #RC_K2OFF_IN,
-           PT  := T#3S;
 
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     2;
@@ -161,18 +138,10 @@ TITLE =Timers (SFB4/TON) - compute each IN condition, CALL every instance every 
       A     #RC_LE4;
       =     #RC_K1HOLD_IN;
 
-      CALL SFB  4 , "TON_RC_K1HOLD"
-           IN  := #RC_K1HOLD_IN,
-           PT  := T#5S;
-
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     3;
       ==I   ;
       =     #RC_K2ON_IN;
-
-      CALL SFB  4 , "TON_RC_K2ON"
-           IN  := #RC_K2ON_IN,
-           PT  := T#500MS;
 
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     0;
@@ -183,17 +152,25 @@ TITLE =Timers (SFB4/TON) - compute each IN condition, CALL every instance every 
       A     #RC_IDLE;
       =     #PWRON_IN;
 
-      CALL SFB  4 , "TON_PWR_ON"
-           IN  := #PWRON_IN,
-           PT  := T#500MS;
-
       A     "GLUE SCALE CONTROL DB".Scale_PowerOFF_Pulse;
       A     #RC_IDLE;
       =     #PWROFF_IN;
 
-      CALL SFB  4 , "TON_PWR_OFF"
-           IN  := #PWROFF_IN,
-           PT  := T#3S;
+      CALL "IEC_TIMERS" , "IEC_TIMERS_DB"
+           LAMP_IN           := #LAMP_IN,
+           LAMP_IN_TIME      := T#500MS,
+           UNDERFILL_IN      := #UNDERFILL_IN,
+           UNDERFILL_IN_TIME := T#5S,
+           RC_K2OFF_IN       := #RC_K2OFF_IN,
+           RC_K2OFF_IN_TIME  := T#3S,
+           RC_K1HOLD_IN      := #RC_K1HOLD_IN,
+           RC_K1HOLD_IN_TIME := T#5S,
+           RC_K2ON_IN        := #RC_K2ON_IN,
+           RC_K2ON_IN_TIME   := T#500MS,
+           PWRON_IN          := #PWRON_IN,
+           PWRON_IN_TIME     := T#500MS,
+           PWROFF_IN         := #PWROFF_IN,
+           PWROFF_IN_TIME    := T#3S;
 
 NETWORK
 TITLE =Compute transfered weight and mirror bottomer velocity to HMI DB
@@ -413,7 +390,7 @@ TITLE =Underfill alarm - latch if weight still below limit after settling (SFB4 
 // network above) - no falling-edge latch needed, TON handles start and
 // auto-reset on its own. Pump_ON_Prev is no longer written here
 // (DB105 field left declared, unused).
-      A     "TON_UNDERFILL".Q;
+      A     "IEC_TIMERS_DB".UNDERFILL_OUT;
       JCN   SKPU;
 
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
@@ -465,7 +442,7 @@ TITLE =Lamp scan clock - mirrors TON_LAMPSCAN's self-oscillating 500ms pulse
 // makes IN true again the scan after - repeating every 500ms while
 // Pump_ON stays true. Not bench-verified - confirm the timing on real
 // hardware.
-      A     "TON_LAMPSCAN".Q;
+      A     "IEC_TIMERS_DB".LAMP_OUT;
       =     "GLUE SCALE CONTROL DB".LampScanClockMem;
 
 NETWORK
@@ -591,7 +568,7 @@ RCST: L     "GLUE SCALE CONTROL DB".ReCalib_Step;
 RCS1: SET   ;
       S     "OUTPUTS DB".KILOTECK_Power_K2; // Power Off
 
-      A     "TON_RC_K2OFF".Q;
+      A     "IEC_TIMERS_DB".RC_K2OFF_OUT;
       JCN   RCDN;
       R     "OUTPUTS DB".KILOTECK_Power_K2;
       L     2;
@@ -607,14 +584,14 @@ RCS2: SET   ;
 RCS3: SET   ;
       S     "OUTPUTS DB".KILOTECK_Power_K2;
 
-      A     "TON_RC_K2ON".Q;
+      A     "IEC_TIMERS_DB".RC_K2ON_OUT;
       JCN   RCDN;
       R     "OUTPUTS DB".KILOTECK_Power_K2;
       L     4;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
       JU    RCDN;
 
-RCS4: A     "TON_RC_K1HOLD".Q;
+RCS4: A     "IEC_TIMERS_DB".RC_K1HOLD_OUT;
       JCN   RCDN;
       L     5;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
@@ -643,7 +620,7 @@ TITLE =Manual power-off pulse - 3s K2 pulse on Scale_PowerOFF_Pulse, auto-clears
       SET   ;
       S     "OUTPUTS DB".KILOTECK_Power_K2;
 
-      A     "TON_PWR_OFF".Q;
+      A     "IEC_TIMERS_DB".PWROFF_OUT;
       JCN   PFDN;
       R     "OUTPUTS DB".KILOTECK_Power_K2;
       CLR   ;
@@ -665,7 +642,7 @@ TITLE =Manual power-on pulse - 500ms K2 pulse on Scale_PowerON_Pulse, auto-clear
       SET   ;
       S     "OUTPUTS DB".KILOTECK_Power_K2;
 
-      A     "TON_PWR_ON".Q;
+      A     "IEC_TIMERS_DB".PWRON_OUT;
       JCN   PNDN;
       R     "OUTPUTS DB".KILOTECK_Power_K2;
       CLR   ;
