@@ -1,0 +1,61 @@
+FUNCTION_BLOCK "PANEL_LED_TIMERS"
+TITLE =Panel LED clocks for FC157 "PANEL LED DRIVE"
+// v0.1 - NEW, same multi-instance "TON" wrapper pattern as FB555
+//   IEC_TIMERS (Michou's own design - one FB, one instance DB, called
+//   once per scan, every timer's IN recomputed fresh every scan - see
+//   that file's header for why SFB/TON-family timers need this). Three
+//   free-running clocks for FC157:
+//   - SCAN: paces the white-lamp scan step (500ms, same rate FC155's old
+//     lamp-scan network used).
+//   - PANIC: paces "Panic Mode"'s all-3-together strobe (150ms - faster
+//     than SCAN, deliberately "urgent"/eye-catching per Michou's "Any
+//     ways to impress").
+//   - ALARM: paces GRN/RED blink (500ms) - shared by both colors, so if
+//     ever both blink at once they blink in sync; flagged as my own
+//     choice, not asked for explicitly.
+//   Self-oscillating: caller computes each IN as "command AND NOT this
+//   FB's own OUT" (see FC157's "Timers" network) - once PT elapses, OUT=1
+//   for one scan, which makes IN false next scan, resetting OUT/ET to 0,
+//   which makes IN true again the scan after - repeating at 2x PT period
+//   while the command bit stays true.
+VERSION : 0.1
+
+
+VAR_INPUT
+  SCAN_IN : BOOL ;
+  SCAN_IN_TIME : TIME ;
+  PANIC_IN : BOOL ;
+  PANIC_IN_TIME : TIME ;
+  ALARM_IN : BOOL ;
+  ALARM_IN_TIME : TIME ;
+END_VAR
+VAR_OUTPUT
+  SCAN_OUT : BOOL ;
+  PANIC_OUT : BOOL ;
+  ALARM_OUT : BOOL ;
+END_VAR
+VAR
+  TON_SCAN : "TON";
+  TON_PANIC : "TON";
+  TON_ALARM : "TON";
+END_VAR
+BEGIN
+NETWORK
+TITLE =Clocks
+
+      CALL #TON_SCAN (
+           IN                       := #SCAN_IN,
+           PT                       := #SCAN_IN_TIME,
+           Q                        := #SCAN_OUT);
+
+      CALL #TON_PANIC (
+           IN                       := #PANIC_IN,
+           PT                       := #PANIC_IN_TIME,
+           Q                        := #PANIC_OUT);
+
+      CALL #TON_ALARM (
+           IN                       := #ALARM_IN,
+           PT                       := #ALARM_IN_TIME,
+           Q                        := #ALARM_OUT);
+
+END_FUNCTION_BLOCK

@@ -83,7 +83,24 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Pump Control, Alarms, KWS CY300 power/c
 //   (nothing active), 3 Process ON (K1+K2 start together), 4 waiting
 //   for K1's 5s hold (started in step 3) to elapse, 5 K1 off,
 //   Scale_PowerON_Pulse cleared, done.
-VERSION : 0.28
+//
+// v0.29 - per Michou's "Panel LED drive" request (2026-10-05): FC155 no
+//   longer drives WHT_SWL_1/2/3_Pnl/RED_LED_Pnl/GRN_LED_Pnl directly -
+//   that's now the new standalone/reusable FC157 "PANEL LED DRIVE"
+//   (scan fwd/rev, independent, Panic Mode, GRN/RED solid/blink, command
+//   bits in new "PANEL LED CMD DB"/DB107, clocks in new FB556/DB108).
+//   Removed the old "Lamp scan clock"/"Lamp scan step"/"White lamps"
+//   networks (LSIN/LSRS/LSDN/WTON/WSCN/WLDN labels) and the old "Alarm
+//   lamps" network; replaced with two short networks that set DB107's
+//   command bits to reproduce the exact same old behavior (forward scan
+//   while Pump_ON, all three on for Glue_Fill_Pump_Test, solid RED/GRN
+//   on any alarm) - then CALLs FC157. No OB1 edit needed, FC157 just
+//   rides FC155's existing scan-cycle call. WHT_Panic/GRN_Blink/
+//   RED_Blink are left alone here so they stay free for independent/HMI
+//   test control - see FC157/DB107 headers. DB105's LampScanStep/
+//   LampScanClockMem fields are no longer written by this file -
+//   superseded, left declared (see DB105 v0.17).
+VERSION : 0.29
 
 
 VAR_TEMP
@@ -465,81 +482,32 @@ TITLE =Drive physical glue pump output - automatic Pump_ON, Glue_Fill_Pump_Test 
       =     "HMI DB".Glue_Fill_Pump_ON;
 
 NETWORK
-TITLE =Lamp scan clock - mirrors TON_LAMPSCAN's self-oscillating 500ms pulse
-// TON_LAMPSCAN's IN (Pump_ON AND NOT its own Q, computed in "Timers"
-// above) makes it free-running: once elapsed, Q=1 for one scan, which
-// immediately makes IN false next scan, auto-resetting Q/ET to 0, which
-// makes IN true again the scan after - repeating every 500ms while
-// Pump_ON stays true. Not bench-verified - confirm the timing on real
-// hardware.
-      A     "IEC_TIMERS_DB".LAMP_OUT;
-      =     "GLUE SCALE CONTROL DB".LampScanClockMem;
-
-NETWORK
-TITLE =Lamp scan step - advances 1->2->3->1 on each clock pulse, resets to 1 when the pump stops
-
-      A     "GLUE SCALE CONTROL DB".Pump_ON;
-      JCN   LSRS;
-
-      A     "GLUE SCALE CONTROL DB".LampScanClockMem;
-      JCN   LSDN;
-
-      L     "GLUE SCALE CONTROL DB".LampScanStep;
-      L     3;
-      >=I   ;
-      JCN   LSIN;
-      L     1;
-      T     "GLUE SCALE CONTROL DB".LampScanStep;
-      JU    LSDN;
-
-LSIN: L     "GLUE SCALE CONTROL DB".LampScanStep;
-      L     1;
-      +I    ;
-      T     "GLUE SCALE CONTROL DB".LampScanStep;
-      JU    LSDN;
-
-LSRS: L     1;
-      T     "GLUE SCALE CONTROL DB".LampScanStep;
-
-LSDN: NOP   0;
-
-NETWORK
-TITLE =White lamps - Glue_Fill_Pump_Test forces all three on, else scan while Pump_ON, else off
+TITLE =White lamp command -> PANEL LED CMD DB (FC157 drives the physical outputs - see that file)
+// Reproduces the old directly-driven behavior (forward scan while
+// Pump_ON, all three on for Glue_Fill_Pump_Test, off otherwise) via
+// FC157's command interface instead of touching WHT_SWL_1/2/3_Pnl here.
 
       A     "HMI DB".Glue_Fill_Pump_Test;
-      JC    WTON;
+      JC    WTST;
 
       A     "GLUE SCALE CONTROL DB".Pump_ON;
-      JC    WSCN;
-
+      =     "PANEL LED CMD DB".WHT_ScanFwd;
       CLR   ;
-      =     "OUTPUTS DB".WHT_SWL_1_Pnl;
-      =     "OUTPUTS DB".WHT_SWL_2_Pnl;
-      =     "OUTPUTS DB".WHT_SWL_3_Pnl;
-      JU    WLDN;
+      =     "PANEL LED CMD DB".WHT_ScanRev;
+      =     "PANEL LED CMD DB".WHT_1;
+      =     "PANEL LED CMD DB".WHT_2;
+      =     "PANEL LED CMD DB".WHT_3;
+      JU    WCDN;
 
-WTON: SET   ;
-      =     "OUTPUTS DB".WHT_SWL_1_Pnl;
-      =     "OUTPUTS DB".WHT_SWL_2_Pnl;
-      =     "OUTPUTS DB".WHT_SWL_3_Pnl;
-      JU    WLDN;
+WTST: CLR   ;
+      =     "PANEL LED CMD DB".WHT_ScanFwd;
+      =     "PANEL LED CMD DB".WHT_ScanRev;
+      SET   ;
+      =     "PANEL LED CMD DB".WHT_1;
+      =     "PANEL LED CMD DB".WHT_2;
+      =     "PANEL LED CMD DB".WHT_3;
 
-WSCN: L     "GLUE SCALE CONTROL DB".LampScanStep;
-      L     1;
-      ==I   ;
-      =     "OUTPUTS DB".WHT_SWL_1_Pnl;
-
-      L     "GLUE SCALE CONTROL DB".LampScanStep;
-      L     2;
-      ==I   ;
-      =     "OUTPUTS DB".WHT_SWL_2_Pnl;
-
-      L     "GLUE SCALE CONTROL DB".LampScanStep;
-      L     3;
-      ==I   ;
-      =     "OUTPUTS DB".WHT_SWL_3_Pnl;
-
-WLDN: NOP   0;
+WCDN: NOP   0;
 
 NETWORK
 TITLE =Power-on + calibrate sequence ("Process ON" = K1+K2 simultaneous) - corrected per Michou 2026-10-03
@@ -687,14 +655,19 @@ TITLE =Manual power-off pulse - 3s K2 pulse on Scale_PowerOFF_Pulse, auto-clears
 PFDN: NOP   0;
 
 NETWORK
-TITLE =Alarm lamps - RED_LED_Pnl if any alarm latched, GRN_LED_Pnl if none
+TITLE =Alarm lamp command -> PANEL LED CMD DB (FC157 drives the physical outputs, solid on/off, unchanged logic)
 // Extends beyond just Overfill/Underfill to include Alarm_ScaleFault.
       A     "GLUE SCALE CONTROL DB".Alarm_Overfill;
       O     "GLUE SCALE CONTROL DB".Alarm_Underfill;
       O     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
-      =     "OUTPUTS DB".RED_LED_Pnl;
+      =     "PANEL LED CMD DB".RED_On;
 
       NOT   ;
-      =     "OUTPUTS DB".GRN_LED_Pnl;
+      =     "PANEL LED CMD DB".GRN_On;
+
+NETWORK
+TITLE =Drive Panel LED outputs - CALL FC157 "PANEL LED DRIVE" once, every scan
+
+      CALL "PANEL LED DRIVE";
 
 END_FUNCTION

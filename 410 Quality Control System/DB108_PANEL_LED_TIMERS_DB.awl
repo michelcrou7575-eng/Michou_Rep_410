@@ -1,0 +1,6 @@
+DATA_BLOCK "PANEL_LED_TIMERS_DB"
+FB       556
+// v0.1 - NEW instance DB for FB556 "PANEL_LED_TIMERS". Called once per
+//   scan from FC157 - see that file's "Timers" network.
+BEGIN
+END_DATA_BLOCK

@@ -1,0 +1,59 @@
+DATA_BLOCK "PANEL LED CMD DB"    DB107
+TITLE =Command/status interface for FC157 "PANEL LED DRIVE"
+// v0.1 - NEW, per Michou's request (2026-10-05) for a separate, reusable
+//   "Panel LED drive" Function controlling the 5 panel lamps (GRN_LED_Pnl,
+//   RED_LED_Pnl, WHT_SWL_1/2/3_Pnl, all in "OUTPUTS DB"/DB60) via a
+//   compact command interface rather than hard-coded logic: "Scan 3 WHT
+//   LEds FWD/REV, each Independant or Panic Mode ... GRN Solid/blink, RED
+//   Solid/blink." Implemented as named command bits (not a packed byte -
+//   S7 packs consecutive BOOLs into bytes automatically, so this gives
+//   named-bit clarity plus the same 1-byte-ish footprint) rather than an
+//   integer mode code, to avoid needing decode logic for multi-value
+//   fields. See FC157's own header for the full behavior/priority rules
+//   and FB556/DB108 for the clock timers.
+//   Any caller (FC155, HMI, a test force-table) can write these bits -
+//   FC155 only drives WHT_ScanFwd/WHT_ScanRev/WHT_1/2/3/GRN_On/RED_On
+//   (see its "White lamp command"/"Alarm lamp command" networks);
+//   WHT_Panic/GRN_Blink/RED_Blink are left alone by FC155 so they stay
+//   free for independent/manual/HMI test use without FC155 fighting them.
+VERSION : 0.1
+
+
+ STRUCT
+   WHT_ScanFwd : BOOL ;	//Command: scan the 3 white lamps forward 1->2->3->1 (see FC157 priority: Panic > Scan > Independent)
+   WHT_ScanRev : BOOL ;	//Command: scan the 3 white lamps reverse 3->2->1->3
+   WHT_Panic : BOOL ;	//Command: "Panic Mode" - all 3 white lamps fast-strobe together, highest priority, overrides scan/independent
+   WHT_1 : BOOL ;	//Command: direct/independent drive, white lamp 1 - only takes effect when neither scan mode nor Panic is active
+   WHT_2 : BOOL ;	//Command: direct/independent drive, white lamp 2
+   WHT_3 : BOOL ;	//Command: direct/independent drive, white lamp 3
+   GRN_On : BOOL ;	//Command: green lamp on - solid unless GRN_Blink is also set
+   GRN_Blink : BOOL ;	//Command: green lamp blink (overrides GRN_On/solid when set)
+   RED_On : BOOL ;	//Command: red lamp on - solid unless RED_Blink is also set
+   RED_Blink : BOOL ;	//Command: red lamp blink (overrides RED_On/solid when set)
+   WHT_ScanStep : INT ;	//Internal - current white-lamp scan index (1/2/3), reset to 1 whenever neither WHT_ScanFwd nor WHT_ScanRev is active - see FC157
+   Spare_1 : BOOL ;
+   Spare_2 : BOOL ;
+   Spare_3 : BOOL ;
+   Spare_4 : BOOL ;
+   Spare_5 : BOOL ;
+   Spare_6 : BOOL ;
+  END_STRUCT ;
+BEGIN
+   WHT_ScanFwd := FALSE;
+   WHT_ScanRev := FALSE;
+   WHT_Panic := FALSE;
+   WHT_1 := FALSE;
+   WHT_2 := FALSE;
+   WHT_3 := FALSE;
+   GRN_On := FALSE;
+   GRN_Blink := FALSE;
+   RED_On := FALSE;
+   RED_Blink := FALSE;
+   WHT_ScanStep := 1;
+   Spare_1 := FALSE;
+   Spare_2 := FALSE;
+   Spare_3 := FALSE;
+   Spare_4 := FALSE;
+   Spare_5 := FALSE;
+   Spare_6 := FALSE;
+END_DATA_BLOCK

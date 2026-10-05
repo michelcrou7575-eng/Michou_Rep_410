@@ -164,26 +164,85 @@ free-running or reset-driven total.
 ## Manual test and indicator lamps (all in "OUTPUTS DB" / DB60, shared
 ## with other subsystems — see `DB60_OUTPUTS_DB.awl`)
 
-- **Glue_Fill_Pump_Test** (`"HMI DB"`, manual HMI bit): overrides
-  `Glue_Fill_Pump_ON` on regardless of `Pump_ON`'s automatic state — and
-  forces `WHT_SWL_1`/`WHT_SWL_2`/`WHT_SWL_3` all on together, in place of
-  the scan pattern below. Since Test only ever forces the output on (never
-  off), this is implemented as a plain OR against the automatic decision,
-  not a conditional branch — same result, less code. Runs unconditionally
-  (not gated by ParseError/Alarm_ScaleFault), so manual test still works
-  during a scale fault.
+**As of FC155 v0.29, FC155 no longer drives these outputs directly.** The
+`Glue_Fill_Pump_Test` and alarm-lamp behavior described below is still true
+end-to-end, but it's now implemented as FC155 writing a few command bits in
+`"PANEL LED CMD DB"` (DB107) and calling `FC157 "PANEL LED DRIVE"`, a
+separate, reusable panel-lamp driver built for Michou's "Panel LED drive"
+request. **See the "Panel LED drive (FC157 / DB107 / FB556 / DB108)" section
+below for the full design** — this section just covers what FC155 itself
+still decides:
+
+- **Glue_Fill_Pump_Test** (`"HMI DB"`, manual HMI bit): forces
+  `WHT_SWL_1_Pnl`/`WHT_SWL_2_Pnl`/`WHT_SWL_3_Pnl` all on together (sets
+  DB107's `WHT_1`/`WHT_2`/`WHT_3` true, scan bits false — FC157's
+  "independent" mode) in place of the scan pattern below. Runs
+  unconditionally (not gated by ParseError/Alarm_ScaleFault), so manual
+  test still works during a scale fault. Does **not** override
+  `Glue_Fill_Pump_ON` here — see "Drive physical glue pump output" network,
+  unchanged.
 - **WHT_SWL_1/2/3 scan pattern**: while `Pump_ON` is true (and Test is not
-  active), these three lamps cycle 1→2→3→1… as a running-light "pump active"
-  indicator. Driven by a 500ms one-scan-pulse flasher (`LampScanClockMem`,
-  mirrored from FB555's `LAMP_OUT` — self-oscillating: its `LAMP_IN` is
-  fed from `Pump_ON AND NOT LAMP_OUT` itself, so it free-runs every 500ms)
-  advancing `LampScanStep` (1/2/3, resets to 1 when the pump stops).
+  active), FC155 sets DB107's `WHT_ScanFwd` true, which makes FC157 cycle
+  the three lamps 1→2→3→1… as a running-light "pump active" indicator
+  (500ms/step, FC157's own clock — see below). Idle (`Pump_ON` false, Test
+  not active): all scan/independent bits cleared, lamps off.
   **Not bench-verified** — hand-traced, not confirmed on real hardware.
-- **RED_LED**: on if `Alarm_Overfill` OR `Alarm_Underfill` OR
-  `Alarm_ScaleFault` is latched. **GRN_LED**: on if none are. (Michou's spec
-  named only Overfill/Underfill for RED and "no alarm" for GRN —
-  `Alarm_ScaleFault` was folded into both here so GRN's "no alarm" claim
-  stays accurate; flag if ScaleFault shouldn't be included.)
+- **RED_LED_Pnl**: on (solid, via DB107's `RED_On`) if `Alarm_Overfill` OR
+  `Alarm_Underfill` OR `Alarm_ScaleFault` is latched. **GRN_LED_Pnl**: on
+  if none are. (Michou's spec named only Overfill/Underfill for RED and
+  "no alarm" for GRN — `Alarm_ScaleFault` was folded into both here so
+  GRN's "no alarm" claim stays accurate; flag if ScaleFault shouldn't be
+  included.) FC155 never sets DB107's `RED_Blink`/`GRN_Blink` — alarms stay
+  solid-only, same as before this change.
+
+## Panel LED drive (FC157 / DB107 / FB556 / DB108)
+
+New, separate, reusable subsystem per Michou's request (2026-10-05): "a
+separate 'Panel LED drive' Function ... Controlled by a Byte or Array of
+bool to: Scan 3 WHT LEds FWD/REV, each Independant or Panic Mode (Any ways
+to impress), And GRN Solid/blink, RED Solid/blink." Drives the same 5 lamp
+outputs FC155 used to drive directly (`GRN_LED_Pnl`, `RED_LED_Pnl`,
+`WHT_SWL_1/2/3_Pnl`, all in `"OUTPUTS DB"`/DB60), now from a command
+interface any caller can write.
+
+- **`"PANEL LED CMD DB"` (DB107)** — the command/status interface. Named
+  BOOL command bits rather than a packed integer "mode byte": S7 already
+  packs consecutive BOOLs into bytes, so this gets the same compact
+  footprint with named-bit clarity and no decode logic needed. Fields:
+  `WHT_ScanFwd`, `WHT_ScanRev`, `WHT_Panic`, `WHT_1`/`WHT_2`/`WHT_3`
+  (independent direct drive), `GRN_On`, `GRN_Blink`, `RED_On`, `RED_Blink`,
+  plus internal `WHT_ScanStep` and 6 spare bits for future growth.
+- **`FC157 "PANEL LED DRIVE"`** — stateless logic, reads DB107 + FB556's
+  clocks, drives the 5 DB60 outputs. White-lamp priority (first match
+  wins): **1. `WHT_Panic`** — all 3 lamps strobe together, fast (150ms) —
+  **2. `WHT_ScanFwd`/`WHT_ScanRev`** — 1→2→3→1 or 3→2→1→3, 500ms/step —
+  **3. otherwise** — "independent": `WHT_1`/`WHT_2`/`WHT_3` mirrored
+  straight to the outputs. GRN/RED: `*_Blink` overrides `*_On`/solid;
+  neither bit means off.
+- **`FB556 "PANEL_LED_TIMERS"` / `"PANEL_LED_TIMERS_DB"` (DB108)** — same
+  multi-instance `"TON"` wrapper pattern as FB555/DB106 (see the hard-
+  limits section above for why), called once per scan from FC157. Three
+  clocks: SCAN (500ms, white-lamp scan pacing), PANIC (150ms, deliberately
+  faster/"impressive"), ALARM (500ms, shared by GRN and RED blink — so if
+  both ever blink at once they blink in sync; my own choice, not asked for
+  explicitly, flagging it).
+- **Who calls it**: FC155 sets `WHT_ScanFwd`/`WHT_1`/`WHT_2`/`WHT_3` (lamp
+  scan while pumping, independent-all-on for `Glue_Fill_Pump_Test`) and
+  `GRN_On`/`RED_On` (alarm state), then `CALL`s FC157 itself — no OB1 edit
+  needed, FC157 just rides FC155's existing scan-cycle call. FC155 never
+  touches `WHT_Panic`/`GRN_Blink`/`RED_Blink`, so those stay free for
+  independent HMI/manual/test-table control without FC155 fighting them.
+- **Not yet done**: no HMI control wired to `WHT_Panic`/`GRN_Blink`/
+  `RED_Blink` yet — Michou asked for the capability, not a specific
+  trigger; needs a screen/button decision. Not bench-verified (compiles
+  cleanly against this repo's own cross-checks, not run on real hardware).
+  FC157/DB107/FB556/DB108 block numbers are only confirmed free within
+  this repo's own limited visibility, same open risk as every other block
+  number picked this project (see "Still open").
+- **`Pump_Out_Valve`** (`"OUTPUTS DB"`, was `Output_060`) — Michou's same
+  message named this bit too, but it's a valve, not a lamp, and nothing
+  about its control semantics was specified. Renamed in DB60 only; **not**
+  part of FC157's scope and not driven by any logic in this repo yet.
 
 ## HMI bridge ("HMI DB" / DB10)
 
@@ -360,27 +419,42 @@ block number picked this session.
 - `HMI DB 10` — the HMI comms DB (DB10), version 0.3, owned by FC160,
   not this project's source of truth. Referenced here because FC155's
   HMI bridge (above) reads/writes several of its fields by symbol name.
-- `DB60_OUTPUTS_DB.awl` — version 0.3. `"OUTPUTS DB"`, the real shared
-  output DB (DB60) — GRN_LED/RED_LED/WHT_SWL_1/2/3 (already referenced
-  by FC155), the new KILOTECK_Calib_K1/KILOTECK_Power_K2 relay bits, and
-  every other output used by other 410 subsystems (tower lamps,
-  Seam_Ctrl_*, etc.), tracked verbatim. Not this subsystem's own DB —
-  shared, so most of its fields aren't glue-scale-related.
+- `DB60_OUTPUTS_DB.awl` — version 0.4. `"OUTPUTS DB"`, the real shared
+  output DB (DB60) — GRN_LED/RED_LED/WHT_SWL_1/2/3 (now driven by FC157,
+  see below), the KILOTECK_Calib_K1/KILOTECK_Power_K2 relay bits, the
+  newly-named `Pump_Out_Valve` (was `Output_060`, not driven by any logic
+  here yet), and every other output used by other 410 subsystems (tower
+  lamps, Seam_Ctrl_*, etc.), tracked verbatim. Not this subsystem's own
+  DB — shared, so most of its fields aren't glue-scale-related.
 - `DB61_INPUTS_DB.awl` — version 0.1. `"INPUTS DB"` (DB61), the shared
   input DB, tracked verbatim. Not touched by the glue-scale/KWS CY300
   work — included for completeness since it was shared alongside DB60.
+- `FC157 PANEL LED DRIVE` — version 0.1. Standalone, reusable panel-lamp
+  driver (white-lamp scan fwd/rev/independent/panic, GRN/RED solid/blink)
+  for the 5 lamp bits in DB60. See "Panel LED drive" above.
+- `DB107_PANEL_LED_CMD_DB.awl` — version 0.1. `"PANEL LED CMD DB"`
+  (DB107), FC157's command/status interface — named command bits, not a
+  packed mode byte. See "Panel LED drive" above.
+- `FB556_PANEL_LED_TIMERS.awl` — version 0.1. Same multi-instance `"TON"`
+  wrapper pattern as FB555 — 3 clocks (scan/panic/alarm-blink) for FC157,
+  called once per scan.
+- `DB108_PANEL_LED_TIMERS_DB.awl` — version 0.1. The single instance DB
+  for FB556, called once from FC157's "Timers" network.
 
 ## Still open
 
 - HMI button/screen wiring to pulse `Reset_Alarms` — the PLC-side reset
   logic exists, nothing drives the bit yet.
-- The lamp-scan flasher (`LampScanClockMem`/`LampScanStep`, FB555's
-  `LAMP_IN`/`LAMP_OUT`) is hand-traced but not bench-verified — confirm
-  the 500ms period and on/off behavior on real hardware.
-- Confirm FB555 and DB106 are genuinely free block numbers on the live
-  PLC — this repo can't see the whole project, same unresolved caution
-  the classical timer numbers (T50-T56, now retired) never got fully
-  closed out on either.
+- FC157's white-lamp scan (now driven by FB556's clock, superseding
+  FB555's `LAMP_IN`/`LAMP_OUT`/`LampScanClockMem`/`LampScanStep`) is
+  hand-traced but not bench-verified — confirm the 500ms scan period, the
+  150ms Panic strobe, and the 500ms GRN/RED blink on real hardware.
+- No HMI control wired to FC157's `WHT_Panic`/`GRN_Blink`/`RED_Blink` yet
+  — Michou asked for the capability, not a specific trigger.
+- Confirm FB555/DB106 and the new FB556/DB107/DB108/FC157 are genuinely
+  free block numbers on the live PLC — this repo can't see the whole
+  project, same unresolved caution the classical timer numbers (T50-T56,
+  now retired) never got fully closed out on either.
 - `Hysteresis`, `SpareReal2`, `Spare_INT`, `Scale_Powered_On`,
   `Actual_Transfered_Weight` (the DB105 copy) and `Spare_11..Spare_15`
   exist in DB105 but aren't wired to anything in FC155 yet — no
