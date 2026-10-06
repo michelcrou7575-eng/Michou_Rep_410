@@ -338,6 +338,14 @@ no step counter — gated directly on the bit's own level; auto-clears
 when the pulse completes. Michou didn't ask for this one to change, so
 it's untouched by the "Process ON" correction.
 
+- **Auto-trigger on restart** (new, Michou 2026-10-06): a third trigger,
+  `"IEC_TIMERS_DB".STARTUP_OUT`'s own rising edge (`"FP 201.3"`),
+  ORed into the same recalibration entry check as `Scale_ReCalib_Req`
+  (both edges computed independently into a new `#RC_TRIG` temp, then
+  ORed - see "Power-up stabilization" below for why). This is what
+  "restarts the scale and makes sure it's calibrated" automatically
+  after a power outage, with no HMI button needed.
+
 Every sequence guards against starting while another is mid-run, so
 K1/K2 are never driven by more than one action in the same scan.
 FB555's other two timers, `LAMP_IN`/`LAMP_OUT` and
@@ -349,7 +357,55 @@ this repo's own tracked files — **not independently verified against
 the live project's full block list**, same unresolved caution as every
 block number picked this session.
 
+### Power-up stabilization (FC155 v0.30 / FB555 v0.4 / DB105 v0.18 / OB100 v0.2)
+
+Per Michou (2026-10-06): *"need a 30 sec delay before restarting after
+power has resumed ... Need to restart KiloTech Scale too and make sure
+it is calibrated before operating the pump!"* An OB can't literally pause
+(that trips the CPU's scan-time watchdog), so the 30s wait and
+auto-recalibration are implemented as ordinary cyclic logic in
+FC155/FB555, armed by two bits OB100 resets every restart:
+
+- **`PowerUp_Settled`** (DB105) — an internal one-shot latch: FALSE for
+  exactly the first OB1 scan after OB100 resets it, TRUE forever after
+  (FC155's "Timers" network reads it into `#STARTUP_IN`, then
+  immediately `SET`s it true for every later scan). Feeding that into
+  FB555's new `STARTUP_IN`/`STARTUP_IN_TIME`(30s)/`STARTUP_OUT` TON
+  gives a timer that reliably measures "30s since the most recent
+  restart," not a stale carryover — DB106's own actual values are
+  battery/cap-backed too, so without the one-scan FALSE pulse this
+  timer could already read done on a fresh power-up.
+- **`STARTUP_OUT`**'s rising edge auto-triggers a **full recalibration**
+  (same state machine as a manual `Scale_ReCalib_Req` pulse — power K2
+  alone off 5s, 3s dwell, Process ON, 5s hold, done) exactly once per
+  restart. This is the "restart the scale" part: recalibrating already
+  starts with a scale power-cycle, so no separate scale-restart step was
+  needed.
+- **`Scale_Calibrated`** (DB105) — reset FALSE by OB100, `SET` by FC155
+  only when the recalibration sequence reaches done (`RCS5`). The new
+  **"Power-up/recalibration interlock"** network blocks `Pump_ON` while
+  `Scale_Calibrated` is FALSE *or* `ReCalib_Step` is non-zero (a
+  recalibration — auto or manual — is actively running) — so the pump
+  physically cannot start until the 30s stabilization wait **and** the
+  full recalibration sequence have both completed. Total worst-case
+  delay after a power outage: ~30s wait + ~18.5s recalibration (5+3+0.5+5s,
+  plus the scan time each step takes to notice) ≈ 50s before the pump can
+  run again.
+- Operator setpoints are untouched by any of this — only state/status
+  bits are reset. `Scale_Calibrated` is **not** reset at the start of a
+  later manual recalibration (only by OB100) — once true it stays true
+  until the next restart, since `ReCalib_Step<>0` already blocks the
+  pump for the sequence's own duration regardless.
+
 **Still open / flagged for confirmation**:
+- **OB100 already exists on the live PLC** (confirmed by Michou,
+  2026-10-06) — `OB100_COMPLETE_RESTART.awl` is NOT something to
+  download as a replacement block. Its networks (now including the
+  `PowerUp_Settled`/`Scale_Calibrated` resets) need to be pasted into
+  the end of the real, existing OB100.
+- The 30s stabilization figure and the recalibration's own ~18.5s are
+  both per Michou's stated durations - neither has been bench-verified
+  against an actual power-outage/recovery test yet.
 - None of `Scale_ReCalib_Req`/`Scale_PowerOFF_Pulse`/`Scale_PowerON_Pulse`
   are wired to HMI buttons yet.
 - `_Pnl` suffix: confirmed real for all five lamp outputs now
@@ -380,7 +436,7 @@ block number picked this session.
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.28. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.30. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), pump control with
   overfill/underfill interlock, platform-weight sanity check + scale-fault
   pump interlock, alarm latching and reset, HMI DB bridge (setpoints, live
@@ -394,13 +450,14 @@ block number picked this session.
   then renumbered FC104->FC155 and renamed "GLUE_SCALE" -> "GLUE SCALE
   LOGIC" on the real PLC project. Repeatedly reconciled against Michou's
   own parallel online rebuilds.
-- `FB555_IEC_TIMERS.awl` — version 0.3. Michou's design: one wrapper FB
-  holding all 7 timers FC155 needs (underfill settle, lamp-scan
-  flasher, and the 5 power-sequence timers) as multi-instance `"TON"`
-  (the imported IEC Timer library FB) children, called once per scan
-  from FC155 instead of 7 separate top-level instance DBs. Fixed one
-  bug while integrating: `TON_UNDERFILL`'s `PT` was wired to
-  `#LAMP_IN_TIME` (copy-paste leftover) instead of `#UNDERFILL_IN_TIME`.
+- `FB555_IEC_TIMERS.awl` — version 0.4. Michou's design: one wrapper FB
+  holding all 8 timers FC155 needs (underfill settle, lamp-scan
+  flasher, the 5 power-sequence timers, and the v0.4 30s startup-
+  stabilization timer) as multi-instance `"TON"` (the imported IEC
+  Timer library FB) children, called once per scan from FC155 instead
+  of separate top-level instance DBs. Fixed one bug while integrating:
+  `TON_UNDERFILL`'s `PT` was wired to `#LAMP_IN_TIME` (copy-paste
+  leftover) instead of `#UNDERFILL_IN_TIME`.
 - `DB106_IEC_TIMERS_DB.awl` — version 0.1. The single instance DB for
   FB555, called once from FC155's "Timers" network. See "Power-up
   calibration workaround" above and "S7-300 STL hard limits" at top for
@@ -410,7 +467,8 @@ block number picked this session.
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
   limits, scale-fault sentinel, platform-weight sanity limit, pump/alarm
   output bits, alarm reset, lamp scan state, power-on/power-off
-  sequencing state. Version 0.16. Symbol is `"GLUE SCALE CONTROL DB"`
+  sequencing state, and (v0.18) the power-up stabilization/calibration-
+  interlock bits. Version 0.18. Symbol is `"GLUE SCALE CONTROL DB"`
   (spaces) to match what FC155 actually references.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.
@@ -440,15 +498,17 @@ block number picked this session.
   called once per scan.
 - `DB108_PANEL_LED_TIMERS_DB.awl` — version 0.1. The single instance DB
   for FB556, called once from FC157's "Timers" network.
-- `OB100_COMPLETE_RESTART.awl` — version 0.1. Forces this project's own
+- `OB100_COMPLETE_RESTART.awl` — version 0.2. Forces this project's own
   state (ReCalib_Step, latched alarms, HMI trigger pulses, the live
-  weight reading, Panel LED command bits) back to a safe idle default on
-  every PLC restart - DB "actual values" otherwise survive a power cycle
-  battery/cap-backed, so without this a reboot mid-recalibration would
-  resume as if nothing happened while the relays are actually
-  de-energized. Does **not** touch operator setpoints. **See "Still
-  open" - may need to be merged into an already-existing OB100** rather
-  than used as-is, since a project can only have one.
+  weight reading, Panel LED command bits, and - v0.2 - the power-up
+  stabilization/calibration-interlock bits) back to a safe idle default
+  on every PLC restart - DB "actual values" otherwise survive a power
+  cycle battery/cap-backed, so without this a reboot mid-recalibration
+  would resume as if nothing happened while the relays are actually
+  de-energized. Does **not** touch operator setpoints. **Confirmed
+  (2026-10-06): OB100 already exists on the live PLC** - this file's
+  networks need to be pasted into the end of that existing block, never
+  downloaded as a replacement.
 
 ## Still open
 

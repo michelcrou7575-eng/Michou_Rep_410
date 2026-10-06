@@ -31,7 +31,20 @@ TITLE =IEC Timers
 //   No interface change here was needed for that - FC155 just feeds
 //   different IN/PT values into the same PWRON_IN/PWRON_IN_TIME slot.
 //   See FC155's own changelog for the full reasoning.
-VERSION : 0.3
+//
+// v0.4 - per Michou (2026-10-06): "Need a 30 sec delay before
+//   restarting after power has resumed ... Stabilisation." Added an 8th
+//   timer, TON_STARTUP (STARTUP_IN/STARTUP_IN_TIME/STARTUP_OUT) - FC155
+//   feeds it a one-shot latch (FALSE for exactly the first scan after
+//   OB100 resets it, TRUE forever after) so it measures time elapsed
+//   since the most recent restart, once, reliably - not a stale
+//   carryover from a previous power cycle (DB106's own actual values
+//   are battery/cap-backed same as any other DB, so without that
+//   one-scan FALSE pulse this timer's Q could already read TRUE on a
+//   fresh restart). See FC155 v0.30 for how STARTUP_OUT auto-triggers
+//   the recalibration sequence and DB105 v0.18 / OB100's own changelog
+//   for the full reasoning.
+VERSION : 0.4
 
 
 VAR_INPUT
@@ -49,6 +62,8 @@ VAR_INPUT
   PWRON_IN_TIME : TIME ;
   PWROFF_IN : BOOL ;
   PWROFF_IN_TIME : TIME ;
+  STARTUP_IN : BOOL ;
+  STARTUP_IN_TIME : TIME ;
 END_VAR
 VAR_OUTPUT
   LAMP_OUT : BOOL ;
@@ -58,6 +73,7 @@ VAR_OUTPUT
   RC_K2ON_OUT : BOOL ;
   PWRON_OUT : BOOL ;
   PWROFF_OUT : BOOL ;
+  STARTUP_OUT : BOOL ;
 END_VAR
 VAR
   TON_UNDERFILL : "TON";
@@ -67,6 +83,7 @@ VAR
   TON_PWR_ON : "TON";
   TON_RC_K2OFF : "TON";
   TON_PWR_OFF : "TON";
+  TON_STARTUP : "TON";
 END_VAR
 BEGIN
 NETWORK
@@ -106,5 +123,10 @@ TITLE =Timers
            IN                       := #PWROFF_IN,
            PT                       := #PWROFF_IN_TIME,
            Q                        := #PWROFF_OUT);
+
+      CALL #TON_STARTUP (
+           IN                       := #STARTUP_IN,
+           PT                       := #STARTUP_IN_TIME,
+           Q                        := #STARTUP_OUT);
 
 END_FUNCTION_BLOCK

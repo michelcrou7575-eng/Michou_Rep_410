@@ -38,7 +38,16 @@ TITLE =Glue Scale Weight Control and Alarms  DB105
 //   LED DRIVE" / "PANEL LED CMD DB" - see those files). Fields left
 //   declared (not deleted - may still be HMI-wired) but marked
 //   superseded/dead below.
-VERSION : 0.17
+// v0.18 - per Michou (2026-10-06): "Need a 30 sec delay before
+//   restarting after power has resumed ... Need to restart KiloTech
+//   Scale too and make sure it is calibrated before operating the
+//   pump!" Added PowerUp_Settled (internal one-shot latch FC155 uses to
+//   feed FB555's new 30s startup-stabilization timer - reset FALSE by
+//   OB100 every restart) and Scale_Calibrated (TRUE once a
+//   recalibration has completed since the last restart - reset FALSE
+//   by OB100, SET by FC155's RCS5 - interlocks the pump). See FC155
+//   v0.30 and OB100_COMPLETE_RESTART.awl's own changelog.
+VERSION : 0.18
 
  STRUCT
    GrossWeight_Actual : INT ;	//Parsed live weight from KWS CY300 scale (kg) - whole kg, scale's decimal digit 
@@ -67,12 +76,14 @@ VERSION : 0.17
    Scale_PowerOFF_Pulse : BOOL ;	//Scale Power-Off Process (Power Hold 3s)
    Scale_ReCalib_Req : BOOL ;	//Start the Power-Off calibration sequence (Power Hold 3s)
    Scale_PowerON_Pulse : BOOL ;	//Input: HMI/manual, pulse or hold TRUE to run "Process ON" standalone (K1+K2 together, see ReCalib_Step/FC155) - enters the same ReCalib_Step sequence directly at step 3, auto-clears when done
-   Spare_11 : BOOL ;	
-   Spare_12 : BOOL ;	
-   Spare_13 : BOOL ;	
-   Spare_14 : BOOL ;	
-   Spare_15 : BOOL ;	
-  END_STRUCT ;	
+   Spare_11 : BOOL ;
+   Spare_12 : BOOL ;
+   Spare_13 : BOOL ;
+   Spare_14 : BOOL ;
+   Spare_15 : BOOL ;
+   PowerUp_Settled : BOOL ;	//Internal - one-shot latch, FALSE for exactly one scan after OB100 resets it, then TRUE forever until the next restart - feeds FB555's STARTUP_IN so its 30s timer starts fresh every power-up
+   Scale_Calibrated : BOOL ;	//Output: TRUE once the scale has completed a recalibration since the last restart - reset FALSE by OB100, SET by FC155 on ReCalib_Step completion (RCS5) - interlocks the pump
+  END_STRUCT ;
 BEGIN
    GrossWeight_Actual := -20663; 
    GrossWeight_Actual_Mem := 0; 
@@ -103,6 +114,8 @@ BEGIN
    Spare_11 := FALSE; 
    Spare_12 := FALSE; 
    Spare_13 := FALSE; 
-   Spare_14 := FALSE; 
+   Spare_14 := FALSE;
    Spare_15 := FALSE;
+   PowerUp_Settled := FALSE;
+   Scale_Calibrated := FALSE;
 END_DATA_BLOCK

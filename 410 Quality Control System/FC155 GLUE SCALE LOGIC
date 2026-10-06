@@ -100,7 +100,32 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Pump Control, Alarms, KWS CY300 power/c
 //   test control - see FC157/DB107 headers. DB105's LampScanStep/
 //   LampScanClockMem fields are no longer written by this file -
 //   superseded, left declared (see DB105 v0.17).
-VERSION : 0.29
+//
+// v0.30 - per Michou (2026-10-06): "need a 30 sec delay (wait) before
+//   restarting after power has resumed ... Need to restart KiloTech
+//   Scale too and make sure it is calibrated before operating the
+//   pump!" Three changes, all gated through OB100 resetting two new
+//   DB105 bits every restart (see that file's own changelog):
+//   - "Timers" now computes STARTUP_IN as a one-shot latch off
+//     PowerUp_Settled (FALSE for exactly the first scan after a
+//     restart, TRUE forever after) and calls FB555's new STARTUP_IN/
+//     STARTUP_IN_TIME(30s)/STARTUP_OUT - reads as "30s elapsed since
+//     the most recent restart," reliably, not a stale carryover (see
+//     FB555 v0.4).
+//   - "Power-on + calibrate sequence"'s trigger check now ORs in
+//     STARTUP_OUT's own rising edge (FP 201.3) alongside the existing
+//     Scale_ReCalib_Req edge (FP 201.1) via a new #RC_TRIG temp - so a
+//     full recalibration ("restart the scale") auto-runs once, 30s
+//     after every restart, same as a manual Scale_ReCalib_Req pulse.
+//     RCS5 (sequence done) now also SETs Scale_Calibrated.
+//   - NEW "Power-up/recalibration interlock" network (after Overfill/
+//     Underfill interlock) blocks Pump_ON while Scale_Calibrated is
+//     FALSE (nothing's completed since the last restart yet) or while
+//     ReCalib_Step is non-zero (a recalibration is actively running,
+//     manual or auto-triggered) - so the pump can't start until the
+//     stabilization wait + the full power-off/dwell/Process-ON/hold
+//     sequence have all actually completed.
+VERSION : 0.30
 
 
 VAR_TEMP
@@ -121,6 +146,8 @@ VAR_TEMP
   RC_IDLE : BOOL ;
   RC_WAIT_IN : BOOL ;
   PWROFF_IN : BOOL ;
+  STARTUP_IN : BOOL ;
+  RC_TRIG : BOOL ;
 END_VAR
 BEGIN
 NETWORK
@@ -203,6 +230,11 @@ TITLE =Timers - compute each IN condition, CALL FB555 "IEC_TIMERS" once, every s
       A     #RC_IDLE;
       =     #PWROFF_IN;
 
+      A     "GLUE SCALE CONTROL DB".PowerUp_Settled; // FALSE for exactly the first scan after OB100 resets it, TRUE forever after - see DB105/OB100 headers
+      =     #STARTUP_IN;
+      SET   ;
+      S     "GLUE SCALE CONTROL DB".PowerUp_Settled;
+
       CALL "IEC_TIMERS" , "IEC_TIMERS_DB"
            LAMP_IN           := #LAMP_IN,
            LAMP_IN_TIME      := T#500MS,
@@ -217,7 +249,9 @@ TITLE =Timers - compute each IN condition, CALL FB555 "IEC_TIMERS" once, every s
            PWRON_IN          := #RC_WAIT_IN,
            PWRON_IN_TIME     := T#3S,
            PWROFF_IN         := #PWROFF_IN,
-           PWROFF_IN_TIME    := T#3S;
+           PWROFF_IN_TIME    := T#3S,
+           STARTUP_IN        := #STARTUP_IN,
+           STARTUP_IN_TIME   := T#30S;
 
 NETWORK
 TITLE =Compute transfered weight and mirror bottomer velocity to HMI DB
@@ -462,6 +496,22 @@ TITLE =Overfill/Underfill interlock - blocks the pump while either is latched
       R     "GLUE SCALE CONTROL DB".Pump_ON;
 
 NETWORK
+TITLE =Power-up/recalibration interlock - blocks the pump until the scale has completed a recalibration since the last restart
+// Scale_Calibrated is reset FALSE by OB100 on every PLC restart (see
+// that file) and only SET TRUE once "Power-on + calibrate sequence"
+// above completes (RCS5) - so the pump can't run until the scale has
+// actually been recalibrated since the last power-up. Also blocks it
+// while ReCalib_Step is non-zero (any recalibration actively running,
+// manual or the v0.30 auto-trigger), not just right after a restart.
+      AN    "GLUE SCALE CONTROL DB".Scale_Calibrated;
+      R     "GLUE SCALE CONTROL DB".Pump_ON;
+
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     0;
+      <>I   ;
+      R     "GLUE SCALE CONTROL DB".Pump_ON;
+
+NETWORK
 TITLE =Exit point for parse-error skip
 
 SKIP: NOP   0;
@@ -536,6 +586,14 @@ TITLE =Power-on + calibrate sequence ("Process ON" = K1+K2 simultaneous) - corre
 //   elapse, 5 K1 off, Scale_PowerON_Pulse cleared, done.
       A     "GLUE SCALE CONTROL DB".Scale_ReCalib_Req;
       FP    "FP 201.1";
+      =     #RC_TRIG;
+
+      A     "IEC_TIMERS_DB".STARTUP_OUT; // auto-trigger a full recalibration once, 30s after every restart - "restart the scale" (Michou, 2026-10-06)
+      FP    "FP 201.3";
+      O     #RC_TRIG;
+      =     #RC_TRIG;
+
+      A     #RC_TRIG;
       JCN   RCCH;
 
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
@@ -623,6 +681,8 @@ RCS5: SET   ;
       =     "GLUE SCALE CONTROL DB".Scale_PowerON_Pulse;
       L     0;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      SET   ;
+      S     "GLUE SCALE CONTROL DB".Scale_Calibrated;
 
 RCDN: NOP   0;
 

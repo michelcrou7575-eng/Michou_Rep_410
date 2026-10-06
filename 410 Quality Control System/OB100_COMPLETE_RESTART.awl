@@ -13,14 +13,25 @@ TITLE =Force glue-scale / Panel LED state to safe idle on every PLC restart
 //   NegativeUnderScore_Value) are deliberately NOT touched here - those
 //   are calibration, not state, and must survive a reboot.
 //
-//   IMPORTANT: OB100 can only exist once in the whole project. If the
-//   live PLC already has an OB100 (very likely, for other 410
-//   subsystems' own restart logic this repo can't see), these networks
-//   need to be appended to the END of that existing OB100, not used to
-//   replace it - downloading this file as a fresh OB100 would silently
-//   delete whatever else it already does. Flagged, not resolved - needs
-//   Michou to confirm whether OB100 already exists online.
-VERSION : 0.1
+//   IMPORTANT, CONFIRMED (Michou, 2026-10-06): OB100 already exists on
+//   the live PLC project. Michou - paste this file's networks into the
+//   END of your existing OB100, do NOT download/replace the whole
+//   block - that would silently delete whatever else it already resets
+//   for other 410 subsystems. This tracked file only ever represents
+//   the networks this repo's own subsystems need, not the real OB100.
+//
+// v0.2 - per Michou (2026-10-06): "Need a 30 sec delay before
+//   restarting after power has resumed ... Need to restart KiloTech
+//   Scale too and make sure it is calibrated before operating the
+//   pump!" OB100 itself can't block/delay (an OB can't sit and wait -
+//   that would trip the scan-time watchdog) - the actual 30s wait and
+//   auto-recalibration run in FC155/FB555 (v0.30/v0.4), gated by two
+//   new DB105 bits this OB resets every restart: PowerUp_Settled
+//   (drives FB555's new 30s startup timer - see FC155's "Timers"
+//   network) and Scale_Calibrated (the new pump interlock - see FC155's
+//   "Power-up/recalibration interlock" network). Added both resets to
+//   the "Glue scale" network below.
+VERSION : 0.2
 
 
 VAR_TEMP
@@ -50,6 +61,8 @@ TITLE =Glue scale - clear latched alarms, HMI trigger pulses, and mid-sequence s
       R     "GLUE SCALE CONTROL DB".Scale_ReCalib_Req;
       R     "GLUE SCALE CONTROL DB".Scale_PowerON_Pulse;
       R     "GLUE SCALE CONTROL DB".LampScanClockMem;
+      R     "GLUE SCALE CONTROL DB".PowerUp_Settled;
+      R     "GLUE SCALE CONTROL DB".Scale_Calibrated;
 
       L     0;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step;
