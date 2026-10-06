@@ -1,8 +1,5 @@
-DATA_BLOCK "INPUTS DB"    DB61
-TITLE =Shared digital inputs (multiple 410 subsystems)
-// v0.1 - NEW tracked source, raw export as uploaded (2026-10-01). Not
-//   touched by the glue-scale/KWS CY300 work (FC155/FC156/DB105/DB60) -
-//   tracked here simply because it's now been shared, same as DB60.
+DATA_BLOCK "INPUTS DB"
+TITLE = DB61
 VERSION : 0.1
 
 
@@ -64,9 +61,9 @@ VERSION : 0.1
    Input_054 : BOOL ;	// - IO 24Bit Input
    Input_055 : BOOL ;	// - IO 24Bit Input
    Glue_Transfer_SW : BOOL ;	// - IO 8Bit Input ET-200B 8/8
-   WHT_SW_1 : BOOL ;	// - IO 8Bit Input ET-200B 8/8
-   WHT_SW_2 : BOOL ;	// - IO 8Bit Input ET-200B 8/8
-   WHT_SW_3 : BOOL ;	// - IO 8Bit Input ET-200B 8/8
+   WHT_SW_1_Pump_Test : BOOL ;	// - IO 8Bit Input ET-200B 8/8
+   WHT_SW_2_ReCalib : BOOL ;	// - IO 8Bit Input ET-200B 8/8
+   WHT_SW_3_Alarm_Reset : BOOL ;	// - IO 8Bit Input ET-200B 8/8
    Level_Sens : BOOL ;	// - IO 8Bit Input ET-200B 8/8
    SPARE_1 : BOOL ;	// - IO 8Bit Input ET-200B 8/8
    SPARE_2 : BOOL ;	// - IO 8Bit Input ET-200B 8/8
@@ -77,16 +74,16 @@ VERSION : 0.1
    Input_067 : BOOL ;	
    Input_068 : BOOL ;	
    Input_069 : BOOL ;	
-   Input_070 : BOOL ;	//Temporary placeholder variable
-   Input_071 : BOOL ;	//Temporary placeholder variable
-   Input_072 : BOOL ;	//Temporary placeholder variable
-   Input_073 : BOOL ;	//Temporary placeholder variable
-   Input_074 : BOOL ;	//Temporary placeholder variable
-   Input_075 : BOOL ;	//Temporary placeholder variable
-   Input_076 : BOOL ;	//Temporary placeholder variable
-   Input_077 : BOOL ;	//Temporary placeholder variable
-   Input_078 : BOOL ;	//Temporary placeholder variable
-   Input_079 : BOOL ;	//Temporary placeholder variable
+   Input_070 : BOOL ;	//  
+   Input_071 : BOOL ;	//  
+   Input_072 : BOOL ;	//  
+   Input_073 : BOOL ;	//  
+   Input_074 : BOOL ;	//  
+   Input_075 : BOOL ;	//  
+   Input_076 : BOOL ;	//  
+   Input_077 : BOOL ;	//  
+   Input_078 : BOOL ;	//  
+   Input_079 : BOOL ;	//  
    Tuber_ON : BOOL ;	//Tuber ON <- +E07R - IO 24Bit Input
    Rotaliner_ON : BOOL ;	//Rotaliner ON <- +E07R - IO 24Bit Input
    Rotaliner_Ready : BOOL ;	//Rotaliner Ready <- +E07R - IO 24Bit Input
@@ -103,183 +100,6 @@ VERSION : 0.1
    Input_092 : BOOL ;	// - IO 24Bit Input
    Input_093 : BOOL ;	// - IO 24Bit Input
    Input_094 : BOOL ;	// - IO 24Bit Input
-   Input_095 : BOOL ;	// - IO 24Bit Input
-   Input_096 : BOOL ;	// - IO 24Bit Input
-   Input_097 : BOOL ;	// - IO 24Bit Input
-   Input_098 : BOOL ;	// - IO 24Bit Input
-   Input_099 : BOOL ;	// - IO 24Bit Input
-   Input_0100 : BOOL ;	// - IO 24Bit Input
-   Input_0101 : BOOL ;	// - IO 24Bit Input
-   Input_0102 : BOOL ;	// - IO 24Bit Input
-   Input_0103 : BOOL ;	// - IO 24Bit Input
-   Input_0104 : BOOL ;	//Temporary placeholder variable
-   Input_0105 : BOOL ;	//Temporary placeholder variable
-   Input_0106 : BOOL ;	//Temporary placeholder variable
-   Input_0107 : BOOL ;	//Temporary placeholder variable
-   Input_0108 : BOOL ;	//Temporary placeholder variable
-   Input_0109 : BOOL ;	//Temporary placeholder variable
-   Input_0110 : BOOL ;	//Temporary placeholder variable
-   Input_0111 : BOOL ;	//Temporary placeholder variable
-   Input_0112 : BOOL ;	//Temporary placeholder variable
-   Input_0113 : BOOL ;	//Temporary placeholder variable
-   Input_0114 : BOOL ;	//Temporary placeholder variable
-   Input_0115 : BOOL ;	//Temporary placeholder variable
-   Input_0116 : BOOL ;	//Temporary placeholder variable
-   Input_0117 : BOOL ;	//Temporary placeholder variable
-   Input_0118 : BOOL ;	//Temporary placeholder variable
-   Input_0119 : BOOL ;	//Temporary placeholder variable
-   Input_0120 : BOOL ;	//Temporary placeholder variable
-   Input_0121 : BOOL ;	//Temporary placeholder variable
-   Input_0122 : BOOL ;	//Temporary placeholder variable
-   Input_0123 : BOOL ;	//Temporary placeholder variable
-   Input_0124 : BOOL ;	//Temporary placeholder variable
-   Input_0125 : BOOL ;	//Temporary placeholder variable
-   Input_0126 : BOOL ;	//Temporary placeholder variable
-   Input_0127 : BOOL ;	//Temporary placeholder variable
-   Input_0128 : BOOL ;	//Temporary placeholder variable
-   Input_0129 : BOOL ;	//Temporary placeholder variable
-   Input_0130 : BOOL ;	//Temporary placeholder variable
-   Input_0131 : BOOL ;	//Temporary placeholder variable
-   Input_0132 : BOOL ;	//Temporary placeholder variable
-   Input_0133 : BOOL ;	//Temporary placeholder variable
-   Input_0134 : BOOL ;	//Temporary placeholder variable
-   Input_0135 : BOOL ;	//Temporary placeholder variable
-   Input_0136 : BOOL ;	//Temporary placeholder variable
-   Input_0137 : BOOL ;	//Temporary placeholder variable
-   Input_0138 : BOOL ;	//Temporary placeholder variable
-   Input_0139 : BOOL ;	//Temporary placeholder variable
-   Input_0140 : BOOL ;	//Temporary placeholder variable
-   Input_0141 : BOOL ;	//Temporary placeholder variable
-   Input_0142 : BOOL ;	//Temporary placeholder variable
-   Input_0143 : BOOL ;	//Temporary placeholder variable
-   Input_0144 : BOOL ;	//Temporary placeholder variable
-   Input_0145 : BOOL ;	//Temporary placeholder variable
-   Input_0146 : BOOL ;	//Temporary placeholder variable
-   Input_0147 : BOOL ;	//Temporary placeholder variable
-   Input_0148 : BOOL ;	//Temporary placeholder variable
-   Input_0149 : BOOL ;	//Temporary placeholder variable
-   Input_0150 : BOOL ;	//Temporary placeholder variable
-   Input_0151 : BOOL ;	//Temporary placeholder variable
-   Input_0152 : BOOL ;	//Temporary placeholder variable
-   Input_0153 : BOOL ;	//Temporary placeholder variable
-   Input_0154 : BOOL ;	//Temporary placeholder variable
-   Input_0155 : BOOL ;	//Temporary placeholder variable
-   Input_0156 : BOOL ;	//Temporary placeholder variable
-   Input_0157 : BOOL ;	//Temporary placeholder variable
-   Input_0158 : BOOL ;	//Temporary placeholder variable
-   Input_0159 : BOOL ;	//Temporary placeholder variable
-   Input_0160 : BOOL ;	// - IO 16Bit Input
-   Input_0161 : BOOL ;	// - IO 16Bit Input
-   Input_0162 : BOOL ;	// - IO 16Bit Input
-   Input_0163 : BOOL ;	// - IO 16Bit Input
-   Input_0164 : BOOL ;	// - IO 16Bit Input
-   Input_0165 : BOOL ;	// - IO 16Bit Input
-   Input_0166 : BOOL ;	// - IO 16Bit Input
-   Input_0167 : BOOL ;	// - IO 16Bit Input
-   Input_0168 : BOOL ;	// - IO 16Bit Input
-   Input_0169 : BOOL ;	// - IO 16Bit Input
-   Input_0170 : BOOL ;	// - IO 16Bit Input
-   Input_0171 : BOOL ;	// - IO 16Bit Input
-   Input_0172 : BOOL ;	// - IO 16Bit Input
-   Input_0173 : BOOL ;	// - IO 16Bit Input
-   Input_0174 : BOOL ;	// - IO 16Bit Input
-   Input_0175 : BOOL ;	// - IO 16Bit Input
-   Input_0176 : BOOL ;	//Temporary placeholder variable
-   Input_0177 : BOOL ;	//Temporary placeholder variable
-   Input_0178 : BOOL ;	//Temporary placeholder variable
-   Input_0179 : BOOL ;	//Temporary placeholder variable
-   Input_0180 : BOOL ;	//Temporary placeholder variable
-   Input_0181 : BOOL ;	//Temporary placeholder variable
-   Input_0182 : BOOL ;	//Temporary placeholder variable
-   Input_0183 : BOOL ;	//Temporary placeholder variable
-   Input_0184 : BOOL ;	//Temporary placeholder variable
-   Input_0185 : BOOL ;	//Temporary placeholder variable
-   Input_0186 : BOOL ;	//Temporary placeholder variable
-   Input_0187 : BOOL ;	//Temporary placeholder variable
-   Input_0188 : BOOL ;	//Temporary placeholder variable
-   Input_0189 : BOOL ;	//Temporary placeholder variable
-   Input_0190 : BOOL ;	//Temporary placeholder variable
-   Input_0191 : BOOL ;	//Temporary placeholder variable
-   Input_0192 : BOOL ;	//Temporary placeholder variable
-   Input_0193 : BOOL ;	//Temporary placeholder variable
-   Input_0194 : BOOL ;	//Temporary placeholder variable
-   Input_0195 : BOOL ;	//Temporary placeholder variable
-   Input_0196 : BOOL ;	//Temporary placeholder variable
-   Input_0197 : BOOL ;	//Temporary placeholder variable
-   Input_0198 : BOOL ;	//Temporary placeholder variable
-   Input_0199 : BOOL ;	//Temporary placeholder variable
-   Input_0200 : BOOL ;	//Temporary placeholder variable
-   Input_0201 : BOOL ;	//Temporary placeholder variable
-   Input_0202 : BOOL ;	//Temporary placeholder variable
-   Input_0203 : BOOL ;	//Temporary placeholder variable
-   Input_0204 : BOOL ;	//Temporary placeholder variable
-   Input_0205 : BOOL ;	//Temporary placeholder variable
-   Input_0206 : BOOL ;	//Temporary placeholder variable
-   Input_0207 : BOOL ;	//Temporary placeholder variable
-   Input_0208 : BOOL ;	//Temporary placeholder variable
-   Input_0209 : BOOL ;	//Temporary placeholder variable
-   Input_0210 : BOOL ;	//Temporary placeholder variable
-   Input_0211 : BOOL ;	//Temporary placeholder variable
-   Input_0212 : BOOL ;	//Temporary placeholder variable
-   Input_0213 : BOOL ;	//Temporary placeholder variable
-   Input_0214 : BOOL ;	//Temporary placeholder variable
-   Input_0215 : BOOL ;	//Temporary placeholder variable
-   Input_0216 : BOOL ;	//Temporary placeholder variable
-   Input_0217 : BOOL ;	//Temporary placeholder variable
-   Input_0218 : BOOL ;	//Temporary placeholder variable
-   Input_0219 : BOOL ;	//Temporary placeholder variable
-   Input_0220 : BOOL ;	//Temporary placeholder variable
-   Input_0221 : BOOL ;	//Temporary placeholder variable
-   Input_0222 : BOOL ;	//Temporary placeholder variable
-   Input_0223 : BOOL ;	//Temporary placeholder variable
-   Input_0224 : BOOL ;	//Temporary placeholder variable
-   Input_0225 : BOOL ;	//Temporary placeholder variable
-   Input_0226 : BOOL ;	//Temporary placeholder variable
-   Input_0227 : BOOL ;	//Temporary placeholder variable
-   Input_0228 : BOOL ;	//Temporary placeholder variable
-   Input_0229 : BOOL ;	//Temporary placeholder variable
-   Input_0230 : BOOL ;	//Temporary placeholder variable
-   Input_0231 : BOOL ;	//Temporary placeholder variable
-   Input_0232 : BOOL ;	//Temporary placeholder variable
-   Input_0233 : BOOL ;	//Temporary placeholder variable
-   Input_0234 : BOOL ;	//Temporary placeholder variable
-   Input_0235 : BOOL ;	//Temporary placeholder variable
-   Input_0236 : BOOL ;	//Temporary placeholder variable
-   Input_0237 : BOOL ;	//Temporary placeholder variable
-   Input_0238 : BOOL ;	//Temporary placeholder variable
-   Input_0239 : BOOL ;	//Temporary placeholder variable
-   Input_0240 : BOOL ;	// - IO 32Bit Input
-   Input_0241 : BOOL ;	// - IO 32Bit Input
-   Input_0242 : BOOL ;	// - IO 32Bit Input
-   Input_0243 : BOOL ;	// - IO 32Bit Input
-   Input_0244 : BOOL ;	// - IO 32Bit Input
-   Input_0245 : BOOL ;	// - IO 32Bit Input
-   Input_0246 : BOOL ;	// - IO 32Bit Input
-   Input_0247 : BOOL ;	// - IO 32Bit Input
-   Input_0248 : BOOL ;	// - IO 32Bit Input
-   Input_0249 : BOOL ;	// - IO 32Bit Input
-   Input_0250 : BOOL ;	// - IO 32Bit Input
-   Input_0251 : BOOL ;	// - IO 32Bit Input
-   Input_0252 : BOOL ;	// - IO 32Bit Input
-   Input_0253 : BOOL ;	// - IO 32Bit Input
-   Input_0254 : BOOL ;	// - IO 32Bit Input
-   Input_0255 : BOOL ;	// - IO 32Bit Input
-   Input_0256 : BOOL ;	// - IO 32Bit Input
-   Input_0257 : BOOL ;	// - IO 32Bit Input
-   Input_0258 : BOOL ;	// - IO 32Bit Input
-   Input_0259 : BOOL ;	// - IO 32Bit Input
-   Input_0260 : BOOL ;	// - IO 32Bit Input
-   Input_0261 : BOOL ;	// - IO 32Bit Input
-   Input_0262 : BOOL ;	// - IO 32Bit Input
-   Input_0263 : BOOL ;	// - IO 32Bit Input
-   Input_0264 : BOOL ;	// - IO 32Bit Input
-   Input_0265 : BOOL ;	// - IO 32Bit Input
-   Input_0266 : BOOL ;	// - IO 32Bit Input
-   Input_0267 : BOOL ;	// - IO 32Bit Input
-   Input_0268 : BOOL ;	// - IO 32Bit Input
-   Input_0269 : BOOL ;	// - IO 32Bit Input
-   Input_0270 : BOOL ;	// - IO 32Bit Input
-   Input_0271 : BOOL ;	// - IO 32Bit Input
   END_STRUCT ;	
 BEGIN
    A_ON_Valve_Sens := FALSE; 
@@ -339,9 +159,9 @@ BEGIN
    Input_054 := FALSE; 
    Input_055 := FALSE; 
    Glue_Transfer_SW := FALSE; 
-   WHT_SW_1 := FALSE; 
-   WHT_SW_2 := FALSE; 
-   WHT_SW_3 := FALSE; 
+   WHT_SW_1_Pump_Test := FALSE; 
+   WHT_SW_2_ReCalib := FALSE; 
+   WHT_SW_3_Alarm_Reset := FALSE; 
    Level_Sens := FALSE; 
    SPARE_1 := FALSE; 
    SPARE_2 := FALSE; 
@@ -378,182 +198,5 @@ BEGIN
    Input_092 := FALSE; 
    Input_093 := FALSE; 
    Input_094 := FALSE; 
-   Input_095 := FALSE; 
-   Input_096 := FALSE; 
-   Input_097 := FALSE; 
-   Input_098 := FALSE; 
-   Input_099 := FALSE; 
-   Input_0100 := FALSE; 
-   Input_0101 := FALSE; 
-   Input_0102 := FALSE; 
-   Input_0103 := FALSE; 
-   Input_0104 := FALSE; 
-   Input_0105 := FALSE; 
-   Input_0106 := FALSE; 
-   Input_0107 := FALSE; 
-   Input_0108 := FALSE; 
-   Input_0109 := FALSE; 
-   Input_0110 := FALSE; 
-   Input_0111 := FALSE; 
-   Input_0112 := FALSE; 
-   Input_0113 := FALSE; 
-   Input_0114 := FALSE; 
-   Input_0115 := FALSE; 
-   Input_0116 := FALSE; 
-   Input_0117 := FALSE; 
-   Input_0118 := FALSE; 
-   Input_0119 := FALSE; 
-   Input_0120 := FALSE; 
-   Input_0121 := FALSE; 
-   Input_0122 := FALSE; 
-   Input_0123 := FALSE; 
-   Input_0124 := FALSE; 
-   Input_0125 := FALSE; 
-   Input_0126 := FALSE; 
-   Input_0127 := FALSE; 
-   Input_0128 := FALSE; 
-   Input_0129 := FALSE; 
-   Input_0130 := FALSE; 
-   Input_0131 := FALSE; 
-   Input_0132 := FALSE; 
-   Input_0133 := FALSE; 
-   Input_0134 := FALSE; 
-   Input_0135 := FALSE; 
-   Input_0136 := FALSE; 
-   Input_0137 := FALSE; 
-   Input_0138 := FALSE; 
-   Input_0139 := FALSE; 
-   Input_0140 := FALSE; 
-   Input_0141 := FALSE; 
-   Input_0142 := FALSE; 
-   Input_0143 := FALSE; 
-   Input_0144 := FALSE; 
-   Input_0145 := FALSE; 
-   Input_0146 := FALSE; 
-   Input_0147 := FALSE; 
-   Input_0148 := FALSE; 
-   Input_0149 := FALSE; 
-   Input_0150 := FALSE; 
-   Input_0151 := FALSE; 
-   Input_0152 := FALSE; 
-   Input_0153 := FALSE; 
-   Input_0154 := FALSE; 
-   Input_0155 := FALSE; 
-   Input_0156 := FALSE; 
-   Input_0157 := FALSE; 
-   Input_0158 := FALSE; 
-   Input_0159 := FALSE; 
-   Input_0160 := FALSE; 
-   Input_0161 := FALSE; 
-   Input_0162 := FALSE; 
-   Input_0163 := FALSE; 
-   Input_0164 := FALSE; 
-   Input_0165 := FALSE; 
-   Input_0166 := FALSE; 
-   Input_0167 := FALSE; 
-   Input_0168 := FALSE; 
-   Input_0169 := FALSE; 
-   Input_0170 := FALSE; 
-   Input_0171 := FALSE; 
-   Input_0172 := FALSE; 
-   Input_0173 := FALSE; 
-   Input_0174 := FALSE; 
-   Input_0175 := FALSE; 
-   Input_0176 := FALSE; 
-   Input_0177 := FALSE; 
-   Input_0178 := FALSE; 
-   Input_0179 := FALSE; 
-   Input_0180 := FALSE; 
-   Input_0181 := FALSE; 
-   Input_0182 := FALSE; 
-   Input_0183 := FALSE; 
-   Input_0184 := FALSE; 
-   Input_0185 := FALSE; 
-   Input_0186 := FALSE; 
-   Input_0187 := FALSE; 
-   Input_0188 := FALSE; 
-   Input_0189 := FALSE; 
-   Input_0190 := FALSE; 
-   Input_0191 := FALSE; 
-   Input_0192 := FALSE; 
-   Input_0193 := FALSE; 
-   Input_0194 := FALSE; 
-   Input_0195 := FALSE; 
-   Input_0196 := FALSE; 
-   Input_0197 := FALSE; 
-   Input_0198 := FALSE; 
-   Input_0199 := FALSE; 
-   Input_0200 := FALSE; 
-   Input_0201 := FALSE; 
-   Input_0202 := FALSE; 
-   Input_0203 := FALSE; 
-   Input_0204 := FALSE; 
-   Input_0205 := FALSE; 
-   Input_0206 := FALSE; 
-   Input_0207 := FALSE; 
-   Input_0208 := FALSE; 
-   Input_0209 := FALSE; 
-   Input_0210 := FALSE; 
-   Input_0211 := FALSE; 
-   Input_0212 := FALSE; 
-   Input_0213 := FALSE; 
-   Input_0214 := FALSE; 
-   Input_0215 := FALSE; 
-   Input_0216 := FALSE; 
-   Input_0217 := FALSE; 
-   Input_0218 := FALSE; 
-   Input_0219 := FALSE; 
-   Input_0220 := FALSE; 
-   Input_0221 := FALSE; 
-   Input_0222 := FALSE; 
-   Input_0223 := FALSE; 
-   Input_0224 := FALSE; 
-   Input_0225 := FALSE; 
-   Input_0226 := FALSE; 
-   Input_0227 := FALSE; 
-   Input_0228 := FALSE; 
-   Input_0229 := FALSE; 
-   Input_0230 := FALSE; 
-   Input_0231 := FALSE; 
-   Input_0232 := FALSE; 
-   Input_0233 := FALSE; 
-   Input_0234 := FALSE; 
-   Input_0235 := FALSE; 
-   Input_0236 := FALSE; 
-   Input_0237 := FALSE; 
-   Input_0238 := FALSE; 
-   Input_0239 := FALSE; 
-   Input_0240 := FALSE; 
-   Input_0241 := FALSE; 
-   Input_0242 := FALSE; 
-   Input_0243 := FALSE; 
-   Input_0244 := FALSE; 
-   Input_0245 := FALSE; 
-   Input_0246 := FALSE; 
-   Input_0247 := FALSE; 
-   Input_0248 := FALSE; 
-   Input_0249 := FALSE; 
-   Input_0250 := FALSE; 
-   Input_0251 := FALSE; 
-   Input_0252 := FALSE; 
-   Input_0253 := FALSE; 
-   Input_0254 := FALSE; 
-   Input_0255 := FALSE; 
-   Input_0256 := FALSE; 
-   Input_0257 := FALSE; 
-   Input_0258 := FALSE; 
-   Input_0259 := FALSE; 
-   Input_0260 := FALSE; 
-   Input_0261 := FALSE; 
-   Input_0262 := FALSE; 
-   Input_0263 := FALSE; 
-   Input_0264 := FALSE; 
-   Input_0265 := FALSE; 
-   Input_0266 := FALSE; 
-   Input_0267 := FALSE; 
-   Input_0268 := FALSE; 
-   Input_0269 := FALSE; 
-   Input_0270 := FALSE; 
-   Input_0271 := FALSE; 
 END_DATA_BLOCK
 
