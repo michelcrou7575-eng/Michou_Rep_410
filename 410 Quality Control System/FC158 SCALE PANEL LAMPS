@@ -1,5 +1,5 @@
 FUNCTION "SCALE PANEL LAMPS" : VOID
-TITLE =Panel LED drive - GRN/RED/WHTx3 command-driven, standalone/reusable
+TITLE =Panel LED drive - GRN/RED/WHTx3 command-driven, standalone/reusable FC158
 // v0.1 - NEW, per Michou's request (2026-10-05): "a separate 'Panel LED
 //   drive' Function ... Controlled by a Byte or Array of bool to: Scan 3
 //   WHT LEds FWD/REV, each Independant or Panic Mode (Any ways to
