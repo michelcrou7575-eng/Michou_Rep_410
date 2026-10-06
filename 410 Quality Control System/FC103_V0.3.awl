@@ -1,5 +1,5 @@
 FUNCTION "ENCODER" : VOID
-TITLE = FM350-2 Encoder and Banner COUNTER
+TITLE = FM350-2 Encoder and Banner COUNTER FC103
 VERSION : 0.3
 
 BEGIN
@@ -35,9 +35,8 @@ TITLE =GATE 0 Reset
 
       AN    "RUN_DATA_DB".SystemReset; 
       L     S5T#1S; 
-      SD    T    104; 
+      SD    "Timer 104"; 
 //;
-      A     T    104; 
+      A     "Timer 104"; 
       S     "FM350_DB".CONTROL_SIGNALS.SW_GATE0; 
 END_FUNCTION
-
