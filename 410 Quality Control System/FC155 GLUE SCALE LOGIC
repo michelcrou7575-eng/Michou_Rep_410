@@ -173,7 +173,23 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Pump Control, Alarms, KWS CY30   FC155
 //   is exactly why ReCalib_Step was sticking at 1) and WHT_2/WHT_3
 //   commented out in WTST (reintroducing the v0.31 bug). Both need
 //   fixing by hand in the live project - this file was already correct.
-VERSION : 0.33
+//
+// v0.34 - reconciled against Michou's next live update (2026-10-06): he
+//   fixed the RC_K2OFF_IN/RC_K1HOLD_IN timer-parameter swap himself
+//   (confirms that was indeed the "ReCalib_Step stuck" cause) and
+//   upgraded the v0.33 Calib-lamp indicator from a flat SET to mirroring
+//   "M 6.5" (a clock-memory bit) while ReCalib_Step<>0 - blinks the lamp
+//   instead of solid on. Also added an immediate SET of WHT_2 on
+//   #RC_TRIG's own edge, in "Power-on + calibrate sequence" - covers the
+//   one scan before ReCalib_Step itself updates, so the lamp turns on
+//   with no gap, then the indicator network's blink takes over.
+//   NOT adopted: his retyped WTST branch still only SET WHT_1 - the
+//   v0.31 bug (WHT_2/WHT_3 never lit during Glue_Fill_Pump_Test) is
+//   still present in what he sent, despite the comment there claiming
+//   it was fixed. Left this file's own already-correct version
+//   (WHT_1/2/3 all under SET) in place - flagged clearly in chat, needs
+//   fixing by hand in the live project again.
+VERSION : 0.34
 
 
 VAR_TEMP
@@ -617,20 +633,30 @@ WTST: CLR   ; // v0.31 fix: Michou's retyped version only SET WHT_1 here (WHT_2/
 WCDN: NOP   0;
 
 NETWORK
-TITLE =Recalibration indicator - WHT_2 (Calib lamp) lit while ReCalib_Step is active
+TITLE =Recalibration indicator - WHT_2 (Calib lamp) blinks while ReCalib_Step is active
 // Overrides "White lamp command" above: WHT_2 is "PANEL LED CMD DB".
 // WHT_2 -> WHT_SWL_2_Pnl_Calib - the recalibration indicator lamp
 // (confirmed by DB60/DB61's own naming - see FC155's v0.31 changelog).
 // Pump_ON is already blocked whenever ReCalib_Step<>0 (see "Power-up/
 // recalibration interlock" above), so the network above always clears
 // WHT_2 to FALSE first (idle/independent branch) before this runs - no
-// explicit reset needed here, just force it true while recalibrating.
+// explicit reset needed here, just drive it while recalibrating.
+// v0.34 (Michou, 2026-10-06): mirrors "M 6.5" (a clock-memory bit) while
+// active, instead of a flat SET - blinks the lamp instead of solid on.
+// Not independently confirmed that M6.5 is configured as a clock memory
+// bit in HW config - flag if it isn't, this would just read as a static
+// bit value instead of blinking. The "Power-on + calibrate sequence"
+// network below also SETs WHT_2 once, on the same scan a recalibration
+// is actually triggered (RC_TRIG's edge) - covers the one scan before
+// ReCalib_Step itself updates to 1, so the lamp turns on immediately
+// with no gap, then this network takes over the blink from the next
+// scan once ReCalib_Step<>0 is true.
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;
       L     0;
       <>I   ;
       JCN   RCWD;
 
-      SET   ;
+      A     "M 6.5";
       =     "PANEL LED CMD DB".WHT_2;
 
 RCWD: NOP   0;
@@ -682,6 +708,7 @@ TITLE =Power-on + calibrate sequence ("Process ON" = K1+K2 simultaneous
       =     #RC_TRIG;
 
       A     #RC_TRIG;
+      S     "PANEL LED CMD DB".WHT_2; // immediate on, same scan the trigger fires - closes the 1-scan gap before ReCalib_Step updates and the "Recalibration indicator" network above takes over
       JCN   RCCH;
 
       L     "GLUE SCALE CONTROL DB".ReCalib_Step;

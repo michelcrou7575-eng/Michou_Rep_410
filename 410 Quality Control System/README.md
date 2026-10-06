@@ -198,13 +198,20 @@ still decides:
   (500ms/step, FC158's own clock — see below). Idle (`Pump_ON` false, Test
   not active): all scan/independent bits cleared, lamps off.
   **Not bench-verified** — hand-traced, not confirmed on real hardware.
-- **WHT_SWL_2_Pnl_Calib lit during recalibration** (v0.33, Michou
-  2026-10-06): a new "Recalibration indicator" network forces DB107's
-  `WHT_2` true whenever `ReCalib_Step<>0` (manual or auto-triggered),
-  overriding the scan-pattern network above — no explicit off-reset
-  needed, since `Pump_ON` is always false while recalibrating (enforced
-  by "Power-up/recalibration interlock" below) so the override network's
-  own `CLR` already zeroes `WHT_2` first every scan this doesn't fire.
+- **WHT_SWL_2_Pnl_Calib blinks during recalibration** (v0.33/v0.34,
+  Michou 2026-10-06): a "Recalibration indicator" network drives DB107's
+  `WHT_2` from `"M 6.5"` (a clock-memory bit — blinks rather than solid
+  on) whenever `ReCalib_Step<>0` (manual or auto-triggered), overriding
+  the scan-pattern network above. No explicit off-reset needed, since
+  `Pump_ON` is always false while recalibrating (enforced by "Power-up/
+  recalibration interlock" below) so the override network's own `CLR`
+  already zeroes `WHT_2` first every scan this doesn't fire. "Power-on +
+  calibrate sequence" (below) also `SET`s `WHT_2` once, the exact scan a
+  recalibration is triggered — closes the one-scan gap before
+  `ReCalib_Step` itself updates and this network's own blink takes over.
+  **Not confirmed**: whether `M 6.5` is actually configured as a clock
+  memory bit in HW config — if not, this just reads as a static value
+  rather than blinking.
 - **RED_LED_Pnl**: as of Michou's own v0.31 edit, **blinks** (via DB107's
   `RED_Blink`, not solid `RED_On` anymore) if `Alarm_Overfill` OR
   `Alarm_Underfill` OR `Alarm_ScaleFault` is latched — more attention-
@@ -448,14 +455,17 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   pump for the sequence's own duration regardless.
 
 **Still open / flagged for confirmation**:
-- **Manual retyping into STEP7 has twice reintroduced bugs this tracked
-  source already fixed** (2026-10-06 report: "ReCalib_Step get stuck!
-  FC155 not working!") - a parameter swap in the "Timers" CALL
-  (`RC_K2OFF_IN`/`RC_K1HOLD_IN` crossed, which is exactly why
-  `ReCalib_Step` stuck at 1) and `WHT_2`/`WHT_3` commented out in `WTST`
-  (the v0.31 bug, back again). Worth downloading/importing this file
-  directly from the repo rather than retyping it by hand, if the live
-  project's workflow allows that - retyping risk is real and recurring.
+- **Manual retyping into STEP7 has repeatedly reintroduced bugs this
+  tracked source already fixed.** 2026-10-06: a parameter swap in the
+  "Timers" CALL (`RC_K2OFF_IN`/`RC_K1HOLD_IN` crossed - the "ReCalib_Step
+  get stuck" report) - fixed by Michou in his next update, confirming
+  the diagnosis. `WHT_2`/`WHT_3` commented out in `WTST` (the v0.31 bug)
+  came back a **second** time in that same update and is still
+  unresolved live as of v0.34 - this file's own `WTST` is correct
+  (`WHT_1`/`WHT_2`/`WHT_3` all under `SET`), needs fixing by hand again
+  in the live project. Worth downloading/importing this file directly
+  from the repo rather than retyping it, if the live project's workflow
+  allows that - this specific line has now broken three times.
 - **OB100 already exists on the live PLC** (confirmed by Michou,
   2026-10-06) — `OB100_COMPLETE_RESTART.awl` is NOT something to
   download as a replacement block. Its networks (now including the
@@ -506,7 +516,7 @@ FC155/FB555, armed by two bits OB100 resets every restart:
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.33. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.34. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), pump control with
   overfill/underfill interlock, platform-weight sanity check + scale-fault
   pump interlock, alarm latching and reset, HMI DB bridge (setpoints, live
