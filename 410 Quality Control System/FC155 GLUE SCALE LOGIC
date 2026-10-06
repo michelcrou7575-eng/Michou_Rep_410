@@ -159,7 +159,21 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Pump Control, Alarms, KWS CY30   FC155
 //   name ("IEC TIMERS DB", "SCALE PANEL LAMPS" calls "PANEL LED TIMERS
 //   DB" internally), never by number, so no CALL/reference text changed
 //   here.
-VERSION : 0.32
+//
+// v0.33 - per Michou (2026-10-06): "Need 'PANEL LED CMD DB'.WHT_2 to
+//   light up while ReCalib Process." NEW "Recalibration indicator"
+//   network: forces WHT_2 (-> WHT_SWL_2_Pnl_Calib, the real Calib lamp)
+//   true whenever ReCalib_Step<>0, overriding "White lamp command"
+//   above. No explicit off-reset needed - that network's own CLR
+//   already zeroes WHT_2 first (Pump_ON is always false while
+//   ReCalib_Step<>0, enforced by "Power-up/recalibration interlock").
+//   Also confirmed (2026-10-06 report): Michou's own live-retyped copy
+//   had two real bugs this tracked source does NOT have - a parameter
+//   swap in the "Timers" CALL (RC_K2OFF_IN/RC_K1HOLD_IN crossed, which
+//   is exactly why ReCalib_Step was sticking at 1) and WHT_2/WHT_3
+//   commented out in WTST (reintroducing the v0.31 bug). Both need
+//   fixing by hand in the live project - this file was already correct.
+VERSION : 0.33
 
 
 VAR_TEMP
@@ -601,6 +615,25 @@ WTST: CLR   ; // v0.31 fix: Michou's retyped version only SET WHT_1 here (WHT_2/
       =     "PANEL LED CMD DB".WHT_3;
 
 WCDN: NOP   0;
+
+NETWORK
+TITLE =Recalibration indicator - WHT_2 (Calib lamp) lit while ReCalib_Step is active
+// Overrides "White lamp command" above: WHT_2 is "PANEL LED CMD DB".
+// WHT_2 -> WHT_SWL_2_Pnl_Calib - the recalibration indicator lamp
+// (confirmed by DB60/DB61's own naming - see FC155's v0.31 changelog).
+// Pump_ON is already blocked whenever ReCalib_Step<>0 (see "Power-up/
+// recalibration interlock" above), so the network above always clears
+// WHT_2 to FALSE first (idle/independent branch) before this runs - no
+// explicit reset needed here, just force it true while recalibrating.
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     0;
+      <>I   ;
+      JCN   RCWD;
+
+      SET   ;
+      =     "PANEL LED CMD DB".WHT_2;
+
+RCWD: NOP   0;
 
 NETWORK
 TITLE =Recalibration switch -> Scale_ReCalib_Req (one-shot per press, v0.31, not yet confirmed)
