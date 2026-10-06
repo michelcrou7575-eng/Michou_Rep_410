@@ -60,7 +60,25 @@ TITLE =IEC Timers
 //   preferred convention) - see DB555_IEC_TIMERS_DB.awl's own
 //   changelog. No change to this file itself (an FB doesn't declare its
 //   instance DB's number).
-VERSION : 0.6
+//
+// v0.7 - per Michou (2026-10-06): "Underfill Alarm should go off even
+//   when pump is running! Could be a leak! ... there should be a timing
+//   alarm too: If Fill take too long or if the glue Barrel is emptying
+//   too fast." Added 3 timers for FC155's new leak-detection networks
+//   (see that file's own changelog for the full logic):
+//   - TON_FILLSTALL: no measurable fill progress for too long while
+//     Pump_ON - self-resetting (FC155 zeroes FILLSTALL_IN whenever
+//     progress is detected, restarting the clock), PT is how long zero
+//     progress is tolerated before alarming.
+//   - TON_FILLTIME: Pump_ON continuously too long overall, even if
+//     weight is still slowly rising - complements TON_FILLSTALL, which
+//     only catches a complete stall, not an abnormally slow fill.
+//   - TON_DRAINCHK: free-running periodic pulse (same self-oscillating
+//     idiom as TON_LAMPSCAN) pacing FC155's idle rapid-drain check,
+//     while Pump_ON is false.
+//   All 3 PT values FC155 feeds are PLACEHOLDERS - this repo has no way
+//   to know the real fill rate or normal idle consumption rate.
+VERSION : 0.7
 
 
 VAR_INPUT
@@ -80,6 +98,12 @@ VAR_INPUT
   PWROFF_IN_TIME : TIME ;
   STARTUP_IN : BOOL ;
   STARTUP_IN_TIME : TIME ;
+  FILLSTALL_IN : BOOL ;
+  FILLSTALL_IN_TIME : TIME ;
+  FILLTIME_IN : BOOL ;
+  FILLTIME_IN_TIME : TIME ;
+  DRAINCHK_IN : BOOL ;
+  DRAINCHK_IN_TIME : TIME ;
 END_VAR
 VAR_OUTPUT
   LAMP_OUT : BOOL ;
@@ -90,6 +114,9 @@ VAR_OUTPUT
   PWRON_OUT : BOOL ;
   PWROFF_OUT : BOOL ;
   STARTUP_OUT : BOOL ;
+  FILLSTALL_OUT : BOOL ;
+  FILLTIME_OUT : BOOL ;
+  DRAINCHK_OUT : BOOL ;
 END_VAR
 VAR
   TON_UNDERFILL : "TON";
@@ -100,6 +127,9 @@ VAR
   TON_RC_K2OFF : "TON";
   TON_PWR_OFF : "TON";
   TON_STARTUP : "TON";
+  TON_FILLSTALL : "TON";
+  TON_FILLTIME : "TON";
+  TON_DRAINCHK : "TON";
 END_VAR
 BEGIN
 NETWORK
@@ -144,5 +174,20 @@ TITLE =Timers
            IN                       := #STARTUP_IN,
            PT                       := #STARTUP_IN_TIME,
            Q                        := #STARTUP_OUT);
+
+      CALL #TON_FILLSTALL (
+           IN                       := #FILLSTALL_IN,
+           PT                       := #FILLSTALL_IN_TIME,
+           Q                        := #FILLSTALL_OUT);
+
+      CALL #TON_FILLTIME (
+           IN                       := #FILLTIME_IN,
+           PT                       := #FILLTIME_IN_TIME,
+           Q                        := #FILLTIME_OUT);
+
+      CALL #TON_DRAINCHK (
+           IN                       := #DRAINCHK_IN,
+           PT                       := #DRAINCHK_IN_TIME,
+           Q                        := #DRAINCHK_OUT);
 
 END_FUNCTION_BLOCK

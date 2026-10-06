@@ -50,7 +50,22 @@ TITLE =Glue Scale Weight Control and Alarms  DB105
 // v0.19 - comment-only: two field comments below still pointed at
 //   FC157/DB108, both superseded (FC157 -> FC158, DB108 -> DB556 -
 //   see those files' own changelogs). Updated to match.
-VERSION : 0.19
+// v0.20 - per Michou (2026-10-06): "Underfill Alarm should go off even
+//   when pump is running! Could be a leak! Should stop the Pump like
+//   overfilled! ... there should be a timing alarm too: If Fill take
+//   too long or if the glue Barrel is emptying too fast ... could be a
+//   leak also." Added fields for FC155's 3 new leak-detection networks
+//   (see that file's own changelog for the full logic):
+//   - FillStall_Ref / FillStallMinRise_SP: catches a stalled fill (pump
+//     running, weight not rising) - feeds Alarm_Underfill, which already
+//     interlocks the pump off, same as overfill.
+//   - DrainCheck_Ref / MaxDrainDrop_SP: catches weight dropping faster
+//     than normal while idle (pump off) - a possible leak during normal
+//     operation, not just during a fill. New Alarm_PossibleLeak.
+//   FillStallMinRise_SP/MaxDrainDrop_SP default values below are
+//   PLACEHOLDERS - this repo has no way to know the real fill rate or
+//   normal idle consumption rate. Confirm/tune via HMI.
+VERSION : 0.20
 
  STRUCT
    GrossWeight_Actual : INT ;	//Parsed live weight from KWS CY300 scale (kg) - whole kg, scale's decimal digit 
@@ -86,6 +101,11 @@ VERSION : 0.19
    Spare_15 : BOOL ;
    PowerUp_Settled : BOOL ;	//Internal - one-shot latch, FALSE for exactly one scan after OB100 resets it, then TRUE forever until the next restart - feeds FB555's STARTUP_IN so its 30s timer starts fresh every power-up
    Scale_Calibrated : BOOL ;	//Output: TRUE once the scale has completed a recalibration since the last restart - reset FALSE by OB100, SET by FC155 on ReCalib_Step completion (RCS5) - interlocks the pump
+   FillStall_Ref : INT ;	//Internal - weight reference for fill-stall detection, reseeded at every Pump_ON rising edge, advanced whenever FillStallMinRise_SP of progress is seen - see FC155 "Fill stall detection"
+   FillStallMinRise_SP : INT := 1;	//Operator-entered (kg) - min weight rise counted as fill progress per stall check - HMI writable - PLACEHOLDER, confirm against real fill rate
+   DrainCheck_Ref : INT ;	//Internal - weight reference for idle rapid-drain detection, rebaselined every check window regardless of outcome - see FC155 "Possible leak" network
+   MaxDrainDrop_SP : INT := 5;	//Operator-entered (kg) - max weight drop allowed per idle check window before flagging a possible leak - HMI writable - PLACEHOLDER, confirm against real normal consumption rate
+   Alarm_PossibleLeak : BOOL ;	//Output: TRUE = weight dropped faster than MaxDrainDrop_SP while idle (Pump_ON false) - latching, interlocks Pump_ON off (see Overfill/Underfill interlock), cleared by Reset_Alarms
   END_STRUCT ;
 BEGIN
    GrossWeight_Actual := -20663; 
@@ -119,6 +139,11 @@ BEGIN
    Spare_13 := FALSE; 
    Spare_14 := FALSE;
    Spare_15 := FALSE;
+   FillStall_Ref := -20663;
+   FillStallMinRise_SP := 1;
+   DrainCheck_Ref := -20663;
+   MaxDrainDrop_SP := 5;
+   Alarm_PossibleLeak := FALSE;
    PowerUp_Settled := FALSE;
    Scale_Calibrated := FALSE;
 END_DATA_BLOCK

@@ -120,6 +120,10 @@ acting on a bad telegram.
   "IEC TIMERS"'s `UNDERFILL_IN`/`UNDERFILL_OUT` — `IN` fed directly
   from `NOT Pump_ON`, no edge-latch needed), checks `GrossWeight_Actual < AlarmLimit_Underfill_SP`
   continuously from that point on while the pump stays off; latching.
+  **Also now latches during an active fill** (v0.36, Michou 2026-10-06:
+  "Underfill Alarm should go off even when pump is running! Could be a
+  leak!") — see "Leak detection (v0.36)" below for the two new networks
+  that reuse this same alarm/interlock while `Pump_ON` is true.
 - **Alarm_ScaleFault**: latching, sets if either:
   - `GrossWeight_Actual` matches `NegativeUnderScore_Value` (INT, -20663)
     — confirmed by Michou: the real INT value the KWS CY300 gives when
@@ -141,16 +145,71 @@ acting on a bad telegram.
   unlike ParseError, which only freezes the pump at its last commanded
   state, a latched Alarm_ScaleFault is an active stop ("No Pump work!").
 - **Overfill/Underfill interlock**: while `Alarm_Overfill` OR
-  `Alarm_Underfill` is latched, `Pump_ON` is forced off and held off (blocks
-  automatic re-engagement) until `Reset_Alarms` clears the alarm.
+  `Alarm_Underfill` OR `Alarm_PossibleLeak` (v0.36) is latched, `Pump_ON`
+  is forced off and held off (blocks automatic re-engagement) until
+  `Reset_Alarms` clears the alarm.
 - **Reset_Alarms**: HMI-driven input bit. While TRUE, clears
-  `Alarm_Overfill`, `Alarm_Underfill` and `Alarm_ScaleFault` together
-  every scan (level-conditioned, not edge — safe as a momentary
-  acknowledge button, since any alarm whose fault condition is still
-  present just re-latches the next scan). Runs unconditionally, even on
-  a scan where ParseError/Alarm_ScaleFault would otherwise skip the rest
-  of the block, so a latched fault can always be cleared. The PLC side
-  is wired; connecting an actual HMI button to this bit is still open.
+  `Alarm_Overfill`, `Alarm_Underfill`, `Alarm_ScaleFault` and (v0.36)
+  `Alarm_PossibleLeak` together every scan (level-conditioned, not edge
+  — safe as a momentary acknowledge button, since any alarm whose fault
+  condition is still present just re-latches the next scan). Runs
+  unconditionally, even on a scan where ParseError/Alarm_ScaleFault
+  would otherwise skip the rest of the block, so a latched fault can
+  always be cleared. The PLC side is wired; connecting an actual HMI
+  button to this bit is still open.
+
+## Leak detection (v0.36, FB555 v0.7, DB105 v0.20)
+
+Per Michou (2026-10-06): *"Underfill Alarm should go off even when pump
+is running! Could be a leak! Should stop the Pump like overfilled! ...
+there should be a timing alarm too: If Fill take too long or if the
+glue Barrel (Container on the scale) is emptying too fast ... could be
+a leak also. We need to forsee any/every scenario that could cause a
+disaster (Glue spill!!!)."* Three new networks, right after "Pump
+control":
+
+- **Fill stall detection** — while `Pump_ON`, the weight should be
+  rising. `FillStall_Ref` (DB105, internal) reseeds to the current
+  weight every time `Pump_ON` has a rising edge (same place
+  `GrossWeight_Actual_Mem` already snapshots) and again every time at
+  least `FillStallMinRise_SP` kg of progress is detected — this
+  naturally resets a watchdog timer (`FB555`'s `TON_FILLSTALL`) each
+  time real progress happens, so it only accumulates during a genuine
+  stall. If 60s (placeholder, hardcoded in FC155's "Timers" like every
+  other timer duration in this file) passes with no progress, it sets
+  **`Alarm_Underfill`** — reused, not a new alarm identity, per
+  Michou's own wording — which already interlocks `Pump_ON` off via the
+  network above, same as overfill.
+- **Fill timeout** — complements the stall check: `Pump_ON` continuously
+  for 5 minutes (placeholder), regardless of whether some progress is
+  still happening, also sets `Alarm_Underfill`. Catches an abnormally
+  slow fill that never quite triggers the stall check (weight keeps
+  inching up, just far slower than normal).
+- **Possible leak** — a genuinely different scenario, running during
+  *normal operation* (`Pump_ON` false), not during a fill: every 30s
+  (placeholder) while idle, if weight has dropped more than
+  `MaxDrainDrop_SP` kg (5kg placeholder) since the last check, sets a
+  **new** alarm, `Alarm_PossibleLeak` (not reused `Alarm_Underfill` —
+  stopping the fill pump wouldn't do anything, it isn't running).
+  Latches, interlocks `Pump_ON` off, cleared by `Reset_Alarms`, drives
+  the RED panel lamp like the other three alarms.
+
+**All thresholds/durations above are placeholders** — this repo has no
+way to know the real fill rate or normal idle glue-consumption rate.
+`FillStallMinRise_SP`/`MaxDrainDrop_SP` are HMI-writable DB105 setpoints
+(tune from there); the three new `TIME` literals live in FC155's
+"Timers" network (hardcoded, like every other timer duration in this
+file — none of those are HMI-adjustable either, kept consistent).
+
+**Not implemented**: Michou's closing line — *"could cause ... machine
+feed to interrupt"* — asks for `Alarm_PossibleLeak` to also stop
+whatever downstream process is consuming the glue, not just block the
+(unrelated, already-stopped) fill pump. This repo has no verified
+output or mechanism for that in scope (the Rotaliner/Tuber machine
+control is a separate subsystem) — implementing it means guessing at a
+cross-subsystem safety interlock, which isn't safe to do without
+confirmation. Flagged for Michou: what should this alarm actually drive
+to stop machine feed?
 
 ## Transfered weight
 
@@ -524,7 +583,7 @@ FC155/FB555, armed by two bits OB100 resets every restart:
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.35. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.36. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), pump control with
   overfill/underfill interlock, platform-weight sanity check + scale-fault
   pump interlock, alarm latching and reset, HMI DB bridge (setpoints, live
@@ -542,16 +601,16 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   (8s K1 hold, early Scale_ReCalib_Req clear, RED now blinks, Pump_Test
   switch wiring) vs. a bug caught and fixed (WTST only lighting one of
   three test lamps).
-- `FB555_IEC_TIMERS.awl` — version 0.6. Michou's design: one wrapper FB
-  holding all 8 timers FC155 needs (underfill settle, lamp-scan
-  flasher, the 5 power-sequence timers, and the 30s startup-
-  stabilization timer) as multi-instance `"TON"` (the imported IEC
-  Timer library FB) children, called once per scan from FC155 instead
-  of separate top-level instance DBs. Symbol renamed "IEC_TIMERS" ->
-  "IEC TIMERS" by Michou (2026-10-06, spaces not underscores, matching
-  every other named block). Fixed one bug while integrating:
-  `TON_UNDERFILL`'s `PT` was wired to `#LAMP_IN_TIME` (copy-paste
-  leftover) instead of `#UNDERFILL_IN_TIME`.
+- `FB555_IEC_TIMERS.awl` — version 0.7. Michou's design: one wrapper FB
+  holding all 11 timers FC155 needs (underfill settle, lamp-scan
+  flasher, the 5 power-sequence timers, the 30s startup-stabilization
+  timer, and the 3 leak-detection timers) as multi-instance `"TON"`
+  (the imported IEC Timer library FB) children, called once per scan
+  from FC155 instead of separate top-level instance DBs. Symbol renamed
+  "IEC_TIMERS" -> "IEC TIMERS" by Michou (2026-10-06, spaces not
+  underscores, matching every other named block). Fixed one bug while
+  integrating: `TON_UNDERFILL`'s `PT` was wired to `#LAMP_IN_TIME`
+  (copy-paste leftover) instead of `#UNDERFILL_IN_TIME`.
 - `DB555_IEC_TIMERS_DB.awl` — version 0.3. `"IEC TIMERS DB"`, the single
   instance DB for FB555, called once from FC155's "Timers" network.
   Renamed to match FB555's symbol, then renumbered DB106 -> DB555 to
@@ -564,9 +623,10 @@ FC155/FB555, armed by two bits OB100 resets every restart:
 - `DB105_GLUE_SCALE_CONTROL_DB.awl` — parsed weight, setpoints, alarm
   limits, scale-fault sentinel, platform-weight sanity limit, pump/alarm
   output bits, alarm reset, lamp scan state, power-on/power-off
-  sequencing state, and (v0.18) the power-up stabilization/calibration-
-  interlock bits. Version 0.19. Symbol is `"GLUE SCALE CONTROL DB"`
-  (spaces) to match what FC155 actually references.
+  sequencing state, (v0.18) the power-up stabilization/calibration-
+  interlock bits, and (v0.20) the leak-detection fields. Version 0.20.
+  Symbol is `"GLUE SCALE CONTROL DB"` (spaces) to match what FC155
+  actually references.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.
 - `Anybus Communicator configuration *.conf` — exported gateway config;
@@ -624,6 +684,18 @@ FC155/FB555, armed by two bits OB100 resets every restart:
 
 ## Still open
 
+- **Leak detection (v0.36) thresholds/durations are all placeholders** -
+  `FillStallMinRise_SP` (1kg), the 60s stall timeout, the 5-minute fill
+  timeout, `MaxDrainDrop_SP` (5kg), and the 30s idle-check window. None
+  of these are based on real process data - confirm/tune against the
+  actual fill rate and normal glue-consumption rate. See "Leak
+  detection" above.
+- **What should `Alarm_PossibleLeak` do to "interrupt machine feed"?**
+  Michou asked for this explicitly but this repo has no verified
+  output/mechanism for stopping the downstream (Rotaliner/Tuber)
+  process - currently this alarm only blocks the fill pump and lights
+  the RED lamp. Needs Michou's answer before it can be implemented
+  safely.
 - **Confirm whether OB100 already exists on the live PLC project.** This
   repo can't see the whole project - if it does, `OB100_COMPLETE_RESTART.
   awl`'s 3 networks need to be pasted into the end of that existing

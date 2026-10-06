@@ -202,7 +202,42 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Pump Control, Alarms, KWS CY30   FC155
 //   changelog entry (describing what was believed at the time, before
 //   the lamps' individual meanings were known) is left as historical
 //   record, not rewritten.
-VERSION : 0.35
+//
+// v0.36 - per Michou (2026-10-06): "Underfill Alarm should go off even
+//   when pump is running! Could be a leak! Should stop the Pump like
+//   overfilled! ... there should be a timing alarm too: If Fill take
+//   too long or if the glue Barrel (Container on the scale) is
+//   emptying too fast ... could be a leak also. We need to forsee any/
+//   every scenario that could cause a disaster (Glue spill!!!)." Three
+//   new networks, right after "Pump control":
+//   - "Fill stall detection": no measurable progress (FillStallMinRise_
+//     SP, 1kg default) for 60s (placeholder) while Pump_ON - sets
+//     Alarm_Underfill (reused, not a new identity, per Michou's wording
+//     - already interlocks Pump_ON off via the existing Overfill/
+//     Underfill interlock). FillStall_Ref reseeds at every Pump_ON
+//     rising edge (same place GrossWeight_Actual_Mem already snapshots).
+//   - "Fill timeout": Pump_ON continuously for 5 minutes (placeholder)
+//     regardless of progress - complements the stall check above, which
+//     only catches a complete stall, not an abnormally slow fill.
+//   - "Possible leak": weight drops more than MaxDrainDrop_SP (5kg
+//     default placeholder) within a 30s (placeholder) window while
+//     idle (Pump_ON false) - genuinely different from the two above
+//     (runs during normal operation, not a fill), so it's a NEW alarm,
+//     Alarm_PossibleLeak, not reused Alarm_Underfill. Added to the
+//     Overfill/Underfill interlock, Reset_Alarms, and Alarm lamp
+//     command networks alongside the existing three alarms.
+//   ALL thresholds/durations above are PLACEHOLDERS - this repo has no
+//   way to know the real fill rate or normal idle consumption rate,
+//   confirm/tune via HMI (the two _SP fields) or in FC155 directly (the
+//   three new TIME literals in "Timers," hardcoded like every other
+//   timer duration in this file).
+//   NOT implemented: "could cause... machine feed to interrupt" - what
+//   the possible-leak alarm should actually DO to the downstream
+//   process consuming the glue is a decision only Michou can make (no
+//   verified output/mechanism for that exists in this repo's scope) -
+//   flagged in chat, Alarm_PossibleLeak only drives the RED lamp and
+//   blocks the fill pump for now.
+VERSION : 0.36
 
 
 VAR_TEMP
@@ -225,6 +260,11 @@ VAR_TEMP
   PWROFF_IN : BOOL ;
   STARTUP_IN : BOOL ;
   RC_TRIG : BOOL ;
+  FILLSTALL_IN : BOOL ;
+  FILLTIME_IN : BOOL ;
+  DRAINCHK_IN : BOOL ;
+  FILLSTALL_THRESH : INT ;
+  PROGRESS_MADE : BOOL ;
 END_VAR
 BEGIN
 NETWORK
@@ -312,6 +352,27 @@ TITLE =Timers - compute each IN condition, CALL FB555 "IEC_TIMERS" once
       SET   ;
       S     "GLUE SCALE CONTROL DB".PowerUp_Settled;
 
+      L     "GLUE SCALE CONTROL DB".FillStall_Ref; // threshold = reference + min-rise, see "Fill stall detection" network below
+      L     "GLUE SCALE CONTROL DB".FillStallMinRise_SP;
+      +I    ;
+      T     #FILLSTALL_THRESH;
+
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+      L     #FILLSTALL_THRESH;
+      >=I   ;
+      =     #PROGRESS_MADE;
+
+      A     "GLUE SCALE CONTROL DB".Pump_ON; // counts up only while filling AND no progress just made - resets the instant progress is seen
+      AN    #PROGRESS_MADE;
+      =     #FILLSTALL_IN;
+
+      A     "GLUE SCALE CONTROL DB".Pump_ON; // counts continuously while filling, resets the instant the pump stops - total fill duration, regardless of progress
+      =     #FILLTIME_IN;
+
+      AN    "GLUE SCALE CONTROL DB".Pump_ON; // free-running periodic pulse while idle, same self-oscillating idiom as LAMP_IN
+      AN    "IEC TIMERS DB".DRAINCHK_OUT;
+      =     #DRAINCHK_IN;
+
       CALL "IEC TIMERS" , "IEC TIMERS DB" (
            LAMP_IN                  := #LAMP_IN,
            LAMP_IN_TIME             := T#500MS,
@@ -327,6 +388,12 @@ TITLE =Timers - compute each IN condition, CALL FB555 "IEC_TIMERS" once
            PWRON_IN_TIME            := T#3S,
            PWROFF_IN                := #PWROFF_IN,
            PWROFF_IN_TIME           := T#3S,
+           FILLSTALL_IN             := #FILLSTALL_IN,
+           FILLSTALL_IN_TIME        := T#60S,
+           FILLTIME_IN              := #FILLTIME_IN,
+           FILLTIME_IN_TIME         := T#5M,
+           DRAINCHK_IN              := #DRAINCHK_IN,
+           DRAINCHK_IN_TIME         := T#30S,
            STARTUP_IN               := #STARTUP_IN,
            STARTUP_IN_TIME          := T#30S);
 
@@ -514,18 +581,80 @@ CHKC: L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
       JU    NXT1; 
 
 OPEN: FP    "FP 201.0"; // edge memory - fires once, the scan Pump_ON is newly commanded on
-      JCN   TRXF; 
-      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; // snapshot weight at pump-start for Actual_Transfered_Weight
-      T     "GLUE SCALE CONTROL DB".GrossWeight_Actual_Mem; 
+      JCN   TRXF;
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; // snapshot weight at pump-start for Actual_Transfered_Weight, also reseeds FillStall_Ref (see "Fill stall detection" below)
+      T     "GLUE SCALE CONTROL DB".GrossWeight_Actual_Mem;
+      T     "GLUE SCALE CONTROL DB".FillStall_Ref;
 
-TRXF: SET   ; 
+TRXF: SET   ;
       S     "GLUE SCALE CONTROL DB".Pump_ON; 
       JU    NXT1; 
 
 CLOS: SET   ; 
       R     "GLUE SCALE CONTROL DB".Pump_ON; 
 
-NXT1: NOP   0; 
+NXT1: NOP   0;
+
+NETWORK
+TITLE =Fill stall detection - no measurable progress while filling, latches Alarm_Underfill (NEW, placeholders - confirm real fill rate)
+// Michou (2026-10-06): "Underfill Alarm should go off even when pump is
+// running! Could be a leak! Should stop the Pump like overfilled!"
+// Reuses Alarm_Underfill (not a new alarm identity) per his wording -
+// it already interlocks Pump_ON off, same as overfill, see "Overfill/
+// Underfill interlock" below. #PROGRESS_MADE/#FILLSTALL_IN are computed
+// in "Timers" above. FillStallMinRise_SP (1kg default) and
+// FILLSTALL_IN_TIME (T#60S, set in "Timers") are PLACEHOLDERS - this
+// repo has no way to know the real fill rate, confirm/tune via HMI.
+      A     #PROGRESS_MADE;
+      JCN   FSDN;
+
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+      T     "GLUE SCALE CONTROL DB".FillStall_Ref;
+
+FSDN: A     "IEC TIMERS DB".FILLSTALL_OUT;
+      S     "GLUE SCALE CONTROL DB".Alarm_Underfill;
+
+NETWORK
+TITLE =Fill timeout - pump running too long overall, even if weight is still slowly rising (NEW, placeholder duration)
+// Michou: "If Fill take too long ... could be a leak also." Separate
+// from the stall check above, which only catches a complete stall (zero
+// progress) - this catches an abnormally slow fill that never quite
+// stalls. Reuses Alarm_Underfill, same interlock. FILLTIME_IN_TIME
+// (T#5M, set in "Timers") is a PLACEHOLDER - needs Michou's real
+// expected fill duration.
+      A     "IEC TIMERS DB".FILLTIME_OUT;
+      S     "GLUE SCALE CONTROL DB".Alarm_Underfill;
+
+NETWORK
+TITLE =Possible leak - weight dropping faster than normal while idle (NEW alarm, placeholder threshold)
+// Michou: "if the glue Barrel (Container on the scale) is emptying too
+// fast ... could be a leak also." A genuinely different scenario from
+// the two above - this runs during normal operation (Pump_ON false),
+// not during a fill, so it does NOT reuse Alarm_Underfill (stopping the
+// fill pump wouldn't do anything, it's not running). New Alarm_
+// PossibleLeak instead - latches, interlocks Pump_ON off (see Overfill/
+// Underfill interlock below), cleared by Reset_Alarms, drives the RED
+// panel lamp (see Alarm lamp command). Does NOT yet interrupt whatever
+// downstream process is consuming the glue ("machine feed") - flagged,
+// not implemented, see chat: needs Michou to say what that action
+// actually is before this repo can safely drive it.
+// MaxDrainDrop_SP (5kg default) and DRAINCHK_IN_TIME (T#30S, set in
+// "Timers") are PLACEHOLDERS - needs Michou's real normal idle
+// consumption rate.
+      A     "IEC TIMERS DB".DRAINCHK_OUT;
+      JCN   DKDN;
+
+      L     "GLUE SCALE CONTROL DB".DrainCheck_Ref;
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+      -I    ;
+      L     "GLUE SCALE CONTROL DB".MaxDrainDrop_SP;
+      >I    ;
+      S     "GLUE SCALE CONTROL DB".Alarm_PossibleLeak;
+
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+      T     "GLUE SCALE CONTROL DB".DrainCheck_Ref;
+
+DKDN: NOP   0;
 
 NETWORK
 TITLE =Overfill alarm - latching, SET ON exceed, no auto-reset here
@@ -566,10 +695,13 @@ TITLE =Overfill/Underfill interlock - blocks the pump while either is l
 // "controls the pump" here means blocking automatic re-engagement, not
 // an immediate stop - both read the same way: force Pump_ON off and
 // keep it off while either alarm (or Alarm_ScaleFault) is latched,
-// until Reset_Alarms clears it.
+// until Reset_Alarms clears it. Alarm_PossibleLeak (v0.36) added here
+// too - don't let the pump start a new fill into a container that's
+// possibly leaking.
       A     "GLUE SCALE CONTROL DB".Alarm_Overfill;
       O     "GLUE SCALE CONTROL DB".Alarm_Underfill;
       O     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
+      O     "GLUE SCALE CONTROL DB".Alarm_PossibleLeak;
       R     "GLUE SCALE CONTROL DB".Pump_ON;
 
 NETWORK
@@ -603,9 +735,10 @@ NETWORK
 TITLE =Reset latched alarms - HMI-driven, runs regardless OF this scan'
 
       A     "GLUE SCALE CONTROL DB".Reset_Alarms;
-      R     "GLUE SCALE CONTROL DB".Alarm_Overfill; 
-      R     "GLUE SCALE CONTROL DB".Alarm_Underfill; 
-      R     "GLUE SCALE CONTROL DB".Alarm_ScaleFault; 
+      R     "GLUE SCALE CONTROL DB".Alarm_Overfill;
+      R     "GLUE SCALE CONTROL DB".Alarm_Underfill;
+      R     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
+      R     "GLUE SCALE CONTROL DB".Alarm_PossibleLeak;
 
 NETWORK
 TITLE =Drive physical glue pump output - automatic Pump_ON, Glue_Fill_P
@@ -853,11 +986,13 @@ PFDN: NOP   0;
 
 NETWORK
 TITLE =Alarm lamp command -> PANEL LED CMD DB (FC157 drives the physica
-// Extends beyond just Overfill/Underfill to include Alarm_ScaleFault.
-      A     "GLUE SCALE CONTROL DB".Alarm_Overfill; 
-      O     "GLUE SCALE CONTROL DB".Alarm_Underfill; 
-      O     "GLUE SCALE CONTROL DB".Alarm_ScaleFault; 
-      =     "PANEL LED CMD DB".RED_Blink; 
+// Extends beyond just Overfill/Underfill to include Alarm_ScaleFault
+// and (v0.36) Alarm_PossibleLeak.
+      A     "GLUE SCALE CONTROL DB".Alarm_Overfill;
+      O     "GLUE SCALE CONTROL DB".Alarm_Underfill;
+      O     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
+      O     "GLUE SCALE CONTROL DB".Alarm_PossibleLeak;
+      =     "PANEL LED CMD DB".RED_Blink;
 
       NOT   ; 
       =     "PANEL LED CMD DB".GRN_On; 
