@@ -175,16 +175,21 @@ still decides:
 
 - **Glue_Fill_Pump_Test** (`"HMI DB"`, mirrored from the real panel switch
   `"INPUTS DB".WHT_SW_1_Pump_Test` as of v0.31 — see "Power-up
-  stabilization" below): forces `WHT_SWL_1_Pnl_Pump_Test`/`WHT_SWL_2_Pnl_
-  Calib`/`WHT_SWL_3_Pnl_Alrm_Ack` all on together (sets DB107's `WHT_1`/
-  `WHT_2`/`WHT_3` true, scan bits false — FC158's "independent" mode) in
-  place of the scan pattern below. Runs unconditionally (not gated by
-  ParseError/Alarm_ScaleFault), so manual test still works during a scale
-  fault. Does **not** override `Glue_Fill_Pump_ON` here — see "Drive
-  physical glue pump output" network, unchanged. **v0.31 caught and fixed
-  a bug** in Michou's own retyped version of this network: the test
-  branch only `SET` `WHT_1`, leaving `WHT_2`/`WHT_3` in the `CLR` group —
-  would have lit only one of the three test lamps instead of all three.
+  stabilization" below): lights **`WHT_SWL_1_Pnl_Pump_Test` only** (sets
+  DB107's `WHT_1` true, `WHT_2`/`WHT_3` stay off, scan bits false —
+  FC158's "independent" mode) in place of the scan pattern below. Runs
+  unconditionally (not gated by ParseError/Alarm_ScaleFault), so manual
+  test still works during a scale fault. Does **not** override
+  `Glue_Fill_Pump_ON` here — see "Drive physical glue pump output"
+  network, unchanged.
+  **v0.31 wrongly called this a bug** ("all three lamps should light
+  for the test") and briefly fixed it that way; **v0.35 (Michou,
+  2026-10-06) corrected the record** - WHT_1-only is intentional, each
+  white lamp mirrors one specific switch's own function (confirmed by
+  DB60/DB61's own renames), so lighting Calib/Alarm_Reset's lamps during
+  a pump test would be misleading. The v0.31 "bug" framing is left in
+  place below only as an accurate record of what was believed at the
+  time, before the per-lamp meanings were known - not rewritten.
 - **The three white lamps/switches have real names now** (DB60/DB61 v0.5/
   v0.2, from Michou's own re-export, 2026-10-06): each white panel lamp
   mirrors its own matching panel switch — `WHT_SWL_1_Pnl_Pump_Test` /
@@ -455,17 +460,15 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   pump for the sequence's own duration regardless.
 
 **Still open / flagged for confirmation**:
-- **Manual retyping into STEP7 has repeatedly reintroduced bugs this
-  tracked source already fixed.** 2026-10-06: a parameter swap in the
-  "Timers" CALL (`RC_K2OFF_IN`/`RC_K1HOLD_IN` crossed - the "ReCalib_Step
-  get stuck" report) - fixed by Michou in his next update, confirming
-  the diagnosis. `WHT_2`/`WHT_3` commented out in `WTST` (the v0.31 bug)
-  came back a **second** time in that same update and is still
-  unresolved live as of v0.34 - this file's own `WTST` is correct
-  (`WHT_1`/`WHT_2`/`WHT_3` all under `SET`), needs fixing by hand again
-  in the live project. Worth downloading/importing this file directly
-  from the repo rather than retyping it, if the live project's workflow
-  allows that - this specific line has now broken three times.
+- **Manual retyping into STEP7 reintroduced a real bug once** (2026-10-06
+  report: "ReCalib_Step get stuck! FC155 not working!") - a parameter
+  swap in the "Timers" CALL (`RC_K2OFF_IN`/`RC_K1HOLD_IN` crossed) -
+  fixed by Michou in his next update, confirming the diagnosis. Worth
+  downloading/importing this file directly from the repo rather than
+  retyping it, if the live project's workflow allows that - retyping
+  risk is real, even if the `WHT_1`-only `WTST` behavior chased in
+  v0.31/v0.35 turned out not to be a bug at all (see "Manual test and
+  indicator lamps" above).
 - **OB100 already exists on the live PLC** (confirmed by Michou,
   2026-10-06) — `OB100_COMPLETE_RESTART.awl` is NOT something to
   download as a replacement block. Its networks (now including the
@@ -516,7 +519,7 @@ FC155/FB555, armed by two bits OB100 resets every restart:
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.34. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.35. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), pump control with
   overfill/underfill interlock, platform-weight sanity check + scale-fault
   pump interlock, alarm latching and reset, HMI DB bridge (setpoints, live

@@ -189,7 +189,20 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Pump Control, Alarms, KWS CY30   FC155
 //   it was fixed. Left this file's own already-correct version
 //   (WHT_1/2/3 all under SET) in place - flagged clearly in chat, needs
 //   fixing by hand in the live project again.
-VERSION : 0.34
+//
+// v0.35 - per Michou (2026-10-06): "Change the comment instead! I want
+//   it that way!" - the v0.31 "bug" framing was wrong. WHT_1 only
+//   (WHT_SWL_1_Pnl_Pump_Test, its own matching lamp) lighting for
+//   Glue_Fill_Pump_Test is INTENTIONAL, not a bug - each white lamp
+//   mirrors one specific switch's function (confirmed by DB60/DB61's
+//   own renames), so lighting WHT_2/WHT_3 (Calib/Alarm_Reset) during a
+//   pump test would be misleading. Reverted WTST to WHT_1 only; updated
+//   this network's own header comment and WTST's inline comment to
+//   describe the real intent instead of calling it a bug. v0.31's own
+//   changelog entry (describing what was believed at the time, before
+//   the lamps' individual meanings were known) is left as historical
+//   record, not rewritten.
+VERSION : 0.35
 
 
 VAR_TEMP
@@ -607,28 +620,36 @@ TITLE =Drive physical glue pump output - automatic Pump_ON, Glue_Fill_P
 NETWORK
 TITLE =White lamp command -> PANEL LED CMD DB (FC158)
 // Reproduces the old directly-driven behavior (forward scan while
-// Pump_ON, all three on for Glue_Fill_Pump_Test, off otherwise) via
+// Pump_ON, WHT_1 only for Glue_Fill_Pump_Test, off otherwise) via
 // FC158's command interface instead of touching WHT_SWL_1/2/3_Pnl here.
-      A     "HMI DB".Glue_Fill_Pump_Test; 
-      JC    WTST; 
+// v0.35 (Michou, 2026-10-06 - "Change the comment instead! I want it
+// that way!"): confirmed intentional - WHT_1 is WHT_SWL_1_Pnl_Pump_Test,
+// its OWN matching lamp, not a generic "test in progress" indicator for
+// all three. Lighting WHT_2/WHT_3 (Calib/Alarm_Reset) too would be
+// misleading, now that each white lamp mirrors a specific switch's
+// function. Retracts the v0.31 "bug" framing - that was based on the
+// older assumption (all three as one undifferentiated scan group),
+// before DB60/DB61's own renames revealed the real per-lamp meaning.
+      A     "HMI DB".Glue_Fill_Pump_Test;
+      JC    WTST;
 
-      A     "GLUE SCALE CONTROL DB".Pump_ON; 
-      =     "PANEL LED CMD DB".WHT_ScanFwd; 
-      CLR   ; 
-      =     "PANEL LED CMD DB".WHT_ScanRev; 
-      =     "PANEL LED CMD DB".WHT_1; 
-      =     "PANEL LED CMD DB".WHT_2; 
-      =     "PANEL LED CMD DB".WHT_3; 
-      JU    WCDN; 
-
-WTST: CLR   ; // v0.31 fix: Michou's retyped version only SET WHT_1 here (WHT_2/WHT_3 stayed in this CLR group) - would light only one of three test lamps. Restored all three under SET below.
+      A     "GLUE SCALE CONTROL DB".Pump_ON;
       =     "PANEL LED CMD DB".WHT_ScanFwd;
+      CLR   ;
       =     "PANEL LED CMD DB".WHT_ScanRev;
-
-      SET   ;
       =     "PANEL LED CMD DB".WHT_1;
       =     "PANEL LED CMD DB".WHT_2;
       =     "PANEL LED CMD DB".WHT_3;
+      JU    WCDN;
+
+WTST: CLR   ; // Intentional: WHT_2/WHT_3 stay off here - only WHT_1 (its own matching lamp) lights for Glue_Fill_Pump_Test, see this network's header
+      =     "PANEL LED CMD DB".WHT_ScanFwd;
+      =     "PANEL LED CMD DB".WHT_ScanRev;
+      =     "PANEL LED CMD DB".WHT_2;
+      =     "PANEL LED CMD DB".WHT_3;
+
+      SET   ;
+      =     "PANEL LED CMD DB".WHT_1;
 
 WCDN: NOP   0;
 
