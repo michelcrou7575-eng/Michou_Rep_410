@@ -1,0 +1,14 @@
+DATA_BLOCK "PANEL LED TIMERS DB"    DB556
+FB       556
+// v0.1 - NEW instance DB for FB556 "PANEL_LED_TIMERS". Called once per
+//   scan from FC157 - see that file's "Timers" network.
+// v0.2 - renamed "PANEL_LED_TIMERS_DB" -> "PANEL LED TIMERS DB" to match
+//   FB556's own v0.2 rename (spaces, not underscores, per Michou's
+//   convention). Rename only.
+// v0.3 - per Michou (2026-10-06): "DB106 Db108 not needed! FB555 Instance
+//   is DB555, FB556 Instance is DB556!!!" Renumbered DB108 -> DB556 to
+//   match its own FB number, his preferred convention. File renamed
+//   DB108_PANEL_LED_TIMERS_DB.awl -> DB556_PANEL_LED_TIMERS_DB.awl to
+//   match. Number only - no symbol/content change.
+BEGIN
+END_DATA_BLOCK

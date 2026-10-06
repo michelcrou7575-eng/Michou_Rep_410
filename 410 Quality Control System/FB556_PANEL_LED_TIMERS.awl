@@ -26,9 +26,15 @@ TITLE =Panel LED clocks for FC158 "SCALE PANEL LAMPS"
 //   Also renamed THIS block's own symbol to match his space-not-
 //   underscore convention for every other named block: "PANEL_LED_
 //   TIMERS" -> "PANEL LED TIMERS" (and the instance DB to "PANEL LED
-//   TIMERS DB" - see DB108's own changelog). Rename only, no logic
+//   TIMERS DB" - see that file's own changelog). Rename only, no logic
 //   change.
-VERSION : 0.2
+//
+// v0.3 - per Michou (2026-10-06): "DB106 Db108 not needed! FB555
+//   Instance is DB555, FB556 Instance is DB556!!!" This FB's instance DB
+//   is renumbered DB108 -> DB556 (matching this FB's own number, his
+//   preferred convention) - see DB556_PANEL_LED_TIMERS_DB.awl's own
+//   changelog. No change to this file itself.
+VERSION : 0.3
 
 
 VAR_INPUT

@@ -6,7 +6,7 @@ TITLE =Panel LED drive - GRN/RED/WHTx3 command-driven, standalone/reusable
 //   impress), And GRN Solid/blink, RED Solid/blink." Drives the 5 lamp
 //   bits in "OUTPUTS DB"/DB60 from the named command bits in "PANEL LED
 //   CMD DB"/DB107 - see that file's header for the interface. Timers are
-//   FB556/DB108, called once per scan below, same proven self-
+//   FB556/DB556, called once per scan below, same proven self-
 //   oscillating pattern as FC155's FB555 call.
 //
 //   White lamp priority (checked in this order, first match wins):
@@ -28,7 +28,13 @@ TITLE =Panel LED drive - GRN/RED/WHTx3 command-driven, standalone/reusable
 //   - DB60 v0.5 renamed the three white-lamp outputs to match their
 //     real switch function: WHT_SWL_1/2/3_Pnl -> _Pnl_Pump_Test/_Pnl_
 //     Calib/_Pnl_Alrm_Ack - all references here updated to match.
-VERSION : 0.2
+//
+// v0.3 - per Michou (2026-10-06): "DB106 Db108 not needed! FB555
+//   Instance is DB555, FB556 Instance is DB556!!!" FB556's instance DB
+//   is renumbered DB108 -> DB556 (matching FB556's own number) - this
+//   file's CALL/field references updated to match (see FB556/
+//   DB556_PANEL_LED_TIMERS_DB.awl's own changelogs).
+VERSION : 0.3
 
 
 VAR_TEMP

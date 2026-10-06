@@ -169,7 +169,7 @@ free-running or reset-driven total.
 end-to-end, but it's now implemented as FC155 writing a few command bits in
 `"PANEL LED CMD DB"` (DB107) and calling `FC158 "SCALE PANEL LAMPS"`, a
 separate, reusable panel-lamp driver built for Michou's "Panel LED drive"
-request. **See the "Panel LED drive (FC158 / DB107 / FB556 / DB108)" section
+request. **See the "Panel LED drive (FC158 / DB107 / FB556 / DB556)" section
 below for the full design** — this section just covers what FC155 itself
 still decides:
 
@@ -207,7 +207,7 @@ still decides:
   GRN's "no alarm" claim stays accurate; flag if ScaleFault shouldn't be
   included.)
 
-## Panel LED drive (FC158 / DB107 / FB556 / DB108)
+## Panel LED drive (FC158 / DB107 / FB556 / DB556)
 
 New, separate, reusable subsystem per Michou's request (2026-10-05): "a
 separate 'Panel LED drive' Function ... Controlled by a Byte or Array of
@@ -223,7 +223,7 @@ FC158 PANEL LED DRIVE" / "Refactor glue scale logic" commits) — FC157
 wasn't actually free on the live project, confirming the "not
 independently verified" caution flagged since this was first built. He
 also renamed the FUNCTION itself from "PANEL LED DRIVE" to **"SCALE PANEL
-LAMPS"**, and renamed FB556/DB108's own symbols to use spaces rather than
+LAMPS"**, and renamed FB556/DB556's own symbols to use spaces rather than
 underscores (`"PANEL LED TIMERS"` / `"PANEL LED TIMERS DB"`), matching his
 convention for every other named block in the project. All reconciled
 here - rename only, no behavior change from what's described below.
@@ -243,8 +243,8 @@ here - rename only, no behavior change from what's described below.
   **3. otherwise** — "independent": `WHT_1`/`WHT_2`/`WHT_3` mirrored
   straight to the outputs. GRN/RED: `*_Blink` overrides `*_On`/solid;
   neither bit means off.
-- **`FB556 "PANEL LED TIMERS"` / `"PANEL LED TIMERS DB"` (DB108)** — same
-  multi-instance `"TON"` wrapper pattern as FB555/DB106 (see the hard-
+- **`FB556 "PANEL LED TIMERS"` / `"PANEL LED TIMERS DB"` (DB556)** — same
+  multi-instance `"TON"` wrapper pattern as FB555/DB555 (see the hard-
   limits section above for why), called once per scan from FC158. Three
   clocks: SCAN (500ms, white-lamp scan pacing), PANIC (150ms, deliberately
   faster/"impressive"), ALARM (500ms, shared by GRN and RED blink — so if
@@ -259,7 +259,7 @@ here - rename only, no behavior change from what's described below.
 - **Not yet done**: no HMI control wired to `WHT_Panic`/`GRN_Blink` yet —
   Michou asked for the capability, not a specific trigger; needs a
   screen/button decision. Not bench-verified (compiles cleanly against
-  this repo's own cross-checks, not run on real hardware). FB556/DB108
+  this repo's own cross-checks, not run on real hardware). FB556/DB556
   block numbers are only confirmed free within this repo's own limited
   visibility, same open risk as every other block number picked this
   project (see "Still open") — FC157→FC158 is a concrete example of that
@@ -328,7 +328,7 @@ FC155 runs timing via **FB555 "IEC TIMERS"** (Michou's design,
 2026-10-03, renamed from "IEC_TIMERS" in his own live edit, 2026-10-06 —
 see its own changelog) — one wrapper FB holding all 8 timers as
 multi-instance `"TON"` (library FB) children, called **once per scan**
-with one instance DB, `"IEC TIMERS DB"` (DB106). See `FB555_IEC_TIMERS.
+with one instance DB, `"IEC TIMERS DB"` (DB555). See `FB555_IEC_TIMERS.
 awl` and "S7-300 STL hard limits" above for why a library FB instead of
 SFB4. Sequencing state lives in DB105 ("GLUE SCALE CONTROL DB" — this
 subsystem's own state, not the shared output DB), specifically
@@ -391,13 +391,13 @@ FB555's other two timers, `LAMP_IN`/`LAMP_OUT` and
 `UNDERFILL_IN`/`UNDERFILL_OUT`, cover the lamp-scan flasher and the
 underfill settle timer respectively — see "Manual test and indicator
 lamps" and the underfill alarm in "Control logic" above. FB555 and
-DB106 are a best guess for free block numbers, confirmed only within
+DB555 are a best guess for free block numbers, confirmed only within
 this repo's own tracked files — **not independently verified against
 the live project's full block list**, same unresolved caution as every
 block number picked this session (and the one that already bit FC157,
 renumbered FC158 - see "Panel LED drive" above).
 
-### Power-up stabilization (FC155 v0.31 / FB555 v0.5 / DB105 v0.18 / OB100 v0.2)
+### Power-up stabilization (FC155 v0.32 / FB555 v0.6 / DB105 v0.19 / OB100 v0.2)
 
 Per Michou (2026-10-06): *"need a 30 sec delay before restarting after
 power has resumed ... Need to restart KiloTech Scale too and make sure
@@ -412,7 +412,7 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   immediately `SET`s it true for every later scan). Feeding that into
   FB555's new `STARTUP_IN`/`STARTUP_IN_TIME`(30s)/`STARTUP_OUT` TON
   gives a timer that reliably measures "30s since the most recent
-  restart," not a stale carryover — DB106's own actual values are
+  restart," not a stale carryover — DB555's own actual values are
   battery/cap-backed too, so without the one-scan FALSE pulse this
   timer could already read done on a fresh power-up.
 - **`STARTUP_OUT`**'s rising edge auto-triggers a **full recalibration**
@@ -458,7 +458,7 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   repo's own limited visibility, confirmed **not** reliable in practice
   now: FC157 "PANEL LED DRIVE" was renumbered FC158 "SCALE PANEL LAMPS"
   by Michou because FC157 wasn't actually free on the live project.
-  FB556/DB107/DB108/FB555/DB106 remain unconfirmed the same way.
+  FB556/DB107/DB556/FB555/DB555 remain unconfirmed the same way.
 - `_Pnl` suffix: confirmed real for all five lamp outputs
   (`RED_LED_Pnl`/`GRN_LED_Pnl` by a real compile error; `WHT_SWL_1/2/3_
   Pnl` by Michou's working online version) — and since refined further
@@ -475,8 +475,11 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   bench-verified beyond "it compiles and the PLC runs it" — confirm
   the self-oscillating lamp-scan flasher's actual timing on real
   hardware.
-- FB555 and DB106 need confirming as genuinely free block numbers on
-  the live PLC before download — this repo can't see the whole project.
+- FB555 needs confirming as a genuinely free block number on the live
+  PLC before download — this repo can't see the whole project. DB555 is
+  no longer a guess, though — Michou explicitly wants the instance DB
+  numbered to match its FB (DB555 for FB555, DB556 for FB556, 2026-10-06),
+  so that part's settled by his own instruction, not a pick of ours.
 - The "Update" network (`#UPDATE` := rising edge of `"M 6.7"`) now gates
   "Detect scale fault" and "Overfill alarm" (and "Platform weight sanity
   check" together with `Pump_ON`) behind `Pump_ON OR #UPDATE` instead of
@@ -506,7 +509,7 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   (8s K1 hold, early Scale_ReCalib_Req clear, RED now blinks, Pump_Test
   switch wiring) vs. a bug caught and fixed (WTST only lighting one of
   three test lamps).
-- `FB555_IEC_TIMERS.awl` — version 0.5. Michou's design: one wrapper FB
+- `FB555_IEC_TIMERS.awl` — version 0.6. Michou's design: one wrapper FB
   holding all 8 timers FC155 needs (underfill settle, lamp-scan
   flasher, the 5 power-sequence timers, and the 30s startup-
   stabilization timer) as multi-instance `"TON"` (the imported IEC
@@ -516,10 +519,12 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   every other named block). Fixed one bug while integrating:
   `TON_UNDERFILL`'s `PT` was wired to `#LAMP_IN_TIME` (copy-paste
   leftover) instead of `#UNDERFILL_IN_TIME`.
-- `DB106_IEC_TIMERS_DB.awl` — version 0.2. `"IEC TIMERS DB"` (renamed to
-  match FB555), the single instance DB for FB555, called once from
-  FC155's "Timers" network. See "Power-up calibration workaround" above
-  and "S7-300 STL hard limits" at top for why this replaced both the
+- `DB555_IEC_TIMERS_DB.awl` — version 0.3. `"IEC TIMERS DB"`, the single
+  instance DB for FB555, called once from FC155's "Timers" network.
+  Renamed to match FB555's symbol, then renumbered DB106 -> DB555 to
+  match FB555's own number too (Michou, 2026-10-06: "FB555 Instance is
+  DB555... !!!"). See "Power-up calibration workaround" above and
+  "S7-300 STL hard limits" at top for why this replaced both the
   classical S5 timers (T50-T56) and the earlier 7-top-level-SFB4-
   instance-DB design.
 - `DB4_ABC3000A_DB.awl` — 20-byte raw telegram buffer, filled by SFC14.
@@ -527,7 +532,7 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   limits, scale-fault sentinel, platform-weight sanity limit, pump/alarm
   output bits, alarm reset, lamp scan state, power-on/power-off
   sequencing state, and (v0.18) the power-up stabilization/calibration-
-  interlock bits. Version 0.18. Symbol is `"GLUE SCALE CONTROL DB"`
+  interlock bits. Version 0.19. Symbol is `"GLUE SCALE CONTROL DB"`
   (spaces) to match what FC155 actually references.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.
@@ -552,20 +557,22 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   their real function (`WHT_SW_1_Pump_Test`/`WHT_SW_2_ReCalib`/`WHT_SW_
   3_Alarm_Reset`) - now wired into FC155, see "Power-up calibration
   workaround" above.
-- `FC158 SCALE PANEL LAMPS` — version 0.2. Standalone, reusable
+- `FC158 SCALE PANEL LAMPS` — version 0.3. Standalone, reusable
   panel-lamp driver (white-lamp scan fwd/rev/independent/panic, GRN/RED
   solid/blink) for the 5 lamp bits in DB60. Built as FC157 "PANEL LED
   DRIVE"; renumbered/renamed by Michou (2026-10-06) because FC157 wasn't
   actually free on the live project. See "Panel LED drive" above.
-- `DB107_PANEL_LED_CMD_DB.awl` — version 0.1. `"PANEL LED CMD DB"`
+- `DB107_PANEL_LED_CMD_DB.awl` — version 0.2. `"PANEL LED CMD DB"`
   (DB107), FC158's command/status interface — named command bits, not a
   packed mode byte. See "Panel LED drive" above.
-- `FB556_PANEL_LED_TIMERS.awl` — version 0.2. `"PANEL LED TIMERS"`
+- `FB556_PANEL_LED_TIMERS.awl` — version 0.3. `"PANEL LED TIMERS"`
   (renamed from "PANEL_LED_TIMERS" by Michou, spaces not underscores).
   Same multi-instance `"TON"` wrapper pattern as FB555 — 3 clocks
   (scan/panic/alarm-blink) for FC158, called once per scan.
-- `DB108_PANEL_LED_TIMERS_DB.awl` — version 0.2. `"PANEL LED TIMERS DB"`
-  (renamed to match FB556), the single instance DB for FB556, called
+- `DB556_PANEL_LED_TIMERS_DB.awl` — version 0.3. `"PANEL LED TIMERS DB"`,
+  the single instance DB for FB556, called once from FC158's "Timers"
+  network. Renamed to match FB556's symbol, then renumbered DB108 ->
+  DB556 to match FB556's own number too, same reasoning as DB555 above.
   once from FC158's "Timers" network.
 - `OB100_COMPLETE_RESTART.awl` — version 0.2. Forces this project's own
   state (ReCalib_Step, latched alarms, HMI trigger pulses, the live
@@ -597,7 +604,7 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   asked for the capability, not a specific trigger. `RED_Blink` is no
   longer free for independent test use - FC155 v0.31 drives it directly
   for the alarm lamp (see "Control logic" above).
-- Confirm FB555/DB106 and the new FB556/DB107/DB108/FC158 are genuinely
+- Confirm FB555/DB555 and the new FB556/DB107/DB556/FC158 are genuinely
   free block numbers on the live PLC — this repo can't see the whole
   project, same unresolved caution the classical timer numbers (T50-T56,
   now retired) never got fully closed out on either. FC157->FC158 (see

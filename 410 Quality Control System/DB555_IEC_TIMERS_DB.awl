@@ -1,4 +1,4 @@
-DATA_BLOCK "IEC TIMERS DB"
+DATA_BLOCK "IEC TIMERS DB"    DB555
 FB       555
 // v0.1 - NEW instance DB for FB555 "IEC_TIMERS" (Michou's multi-instance
 //   wrapper FB, replacing the earlier 7 separate top-level SFB4 instance
@@ -9,5 +9,10 @@ FB       555
 // v0.2 - renamed "IEC_TIMERS_DB" -> "IEC TIMERS DB" to match Michou's own
 //   rename of FB555's symbol (spaces, not underscores) - see FB555's
 //   v0.5 changelog. Rename only.
+// v0.3 - per Michou (2026-10-06): "DB106 Db108 not needed! FB555 Instance
+//   is DB555, FB556 Instance is DB556!!!" Renumbered DB106 -> DB555 to
+//   match its own FB number, his preferred convention. File renamed
+//   DB106_IEC_TIMERS_DB.awl -> DB555_IEC_TIMERS_DB.awl to match. Number
+//   only - no symbol/content change.
 BEGIN
 END_DATA_BLOCK

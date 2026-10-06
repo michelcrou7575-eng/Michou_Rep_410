@@ -1,9 +1,0 @@
-DATA_BLOCK "PANEL LED TIMERS DB"
-FB       556
-// v0.1 - NEW instance DB for FB556 "PANEL_LED_TIMERS". Called once per
-//   scan from FC157 - see that file's "Timers" network.
-// v0.2 - renamed "PANEL_LED_TIMERS_DB" -> "PANEL LED TIMERS DB" to match
-//   FB556's own v0.2 rename (spaces, not underscores, per Michou's
-//   convention). Rename only.
-BEGIN
-END_DATA_BLOCK

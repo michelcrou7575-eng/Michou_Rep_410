@@ -150,7 +150,16 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Pump Control, Alarms, KWS CY30   FC155
 //   Alarms - closes the other two "still open" HMI-wiring items. Not
 //   confirmed by Michou - flag if these two switches are meant for
 //   something else.
-VERSION : 0.31
+//
+// v0.32 - comment-only: per Michou (2026-10-06): "DB106 Db108 not
+//   needed! FB555 Instance is DB555, FB556 Instance is DB556!!!" FB555's
+//   instance DB is renumbered DB106 -> DB555, FB556's DB108 -> DB556
+//   (each now matches its own FB's number, his preferred convention) -
+//   see those files' own changelogs. This file calls both by symbolic
+//   name ("IEC TIMERS DB", "SCALE PANEL LAMPS" calls "PANEL LED TIMERS
+//   DB" internally), never by number, so no CALL/reference text changed
+//   here.
+VERSION : 0.32
 
 
 VAR_TEMP
