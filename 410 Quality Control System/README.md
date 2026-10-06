@@ -201,15 +201,13 @@ way to know the real fill rate or normal idle glue-consumption rate.
 "Timers" network (hardcoded, like every other timer duration in this
 file — none of those are HMI-adjustable either, kept consistent).
 
-**Not implemented**: Michou's closing line — *"could cause ... machine
-feed to interrupt"* — asks for `Alarm_PossibleLeak` to also stop
-whatever downstream process is consuming the glue, not just block the
-(unrelated, already-stopped) fill pump. This repo has no verified
-output or mechanism for that in scope (the Rotaliner/Tuber machine
-control is a separate subsystem) — implementing it means guessing at a
-cross-subsystem safety interlock, which isn't safe to do without
-confirmation. Flagged for Michou: what should this alarm actually drive
-to stop machine feed?
+**Not implemented, confirmed deferred (Michou, 2026-10-06)**: Michou's
+closing line — *"could cause ... machine feed to interrupt"* — asked
+for `Alarm_PossibleLeak` to also stop whatever downstream process is
+consuming the glue, not just block the (unrelated, already-stopped)
+fill pump. Asked directly: detect-and-alarm only, for now - no
+cross-subsystem interlock to the Rotaliner/Tuber process. Revisit if a
+specific output/mechanism for that is identified later.
 
 ## Transfered weight
 
@@ -690,12 +688,12 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   of these are based on real process data - confirm/tune against the
   actual fill rate and normal glue-consumption rate. See "Leak
   detection" above.
-- **What should `Alarm_PossibleLeak` do to "interrupt machine feed"?**
-  Michou asked for this explicitly but this repo has no verified
-  output/mechanism for stopping the downstream (Rotaliner/Tuber)
-  process - currently this alarm only blocks the fill pump and lights
-  the RED lamp. Needs Michou's answer before it can be implemented
-  safely.
+- **"Interrupt machine feed" — confirmed deferred (Michou, 2026-10-06):**
+  for now, `Alarm_PossibleLeak` only blocks the fill pump and lights the
+  RED lamp, same as the other three alarms. No cross-subsystem
+  interlock to the downstream (Rotaliner/Tuber) process is wired - that
+  stays a manual operator response until a specific output/mechanism is
+  identified and asked for.
 - **Confirm whether OB100 already exists on the live PLC project.** This
   repo can't see the whole project - if it does, `OB100_COMPLETE_RESTART.
   awl`'s 3 networks need to be pasted into the end of that existing
