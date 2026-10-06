@@ -100,7 +100,57 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Pump Control, Alarms, KWS CY30   FC155
 //   test control - see FC157/DB107 headers. DB105's LampScanStep/
 //   LampScanClockMem fields are no longer written by this file -
 //   superseded, left declared (see DB105 v0.17).
-VERSION : 1.1
+//
+// v0.30 - per Michou (2026-10-06): "need a 30 sec delay (wait) before
+//   restarting after power has resumed ... Need to restart KiloTech
+//   Scale too and make sure it is calibrated before operating the
+//   pump!" Three changes, all gated through OB100 resetting two new
+//   DB105 bits every restart (see that file's own changelog):
+//   - "Timers" now computes STARTUP_IN as a one-shot latch off
+//     PowerUp_Settled (FALSE for exactly the first scan after a
+//     restart, TRUE forever after) and calls FB555's new STARTUP_IN/
+//     STARTUP_IN_TIME(30s)/STARTUP_OUT - reads as "30s elapsed since
+//     the most recent restart," reliably, not a stale carryover (see
+//     FB555 v0.4).
+//   - "Power-on + calibrate sequence"'s trigger check now ORs in
+//     STARTUP_OUT's own rising edge (FP 201.3) alongside the existing
+//     Scale_ReCalib_Req edge (FP 201.1) via a new #RC_TRIG temp - so a
+//     full recalibration ("restart the scale") auto-runs once, 30s
+//     after every restart, same as a manual Scale_ReCalib_Req pulse.
+//     RCS5 (sequence done) now also SETs Scale_Calibrated.
+//   - NEW "Power-up/recalibration interlock" network (after Overfill/
+//     Underfill interlock) blocks Pump_ON while Scale_Calibrated is
+//     FALSE (nothing's completed since the last restart yet) or while
+//     ReCalib_Step is non-zero (a recalibration is actively running,
+//     manual or auto-triggered) - so the pump can't start until the
+//     stabilization wait + the full power-off/dwell/Process-ON/hold
+//     sequence have all actually completed.
+//
+// v0.31 - reconciled against Michou's own "Refactor glue scale logic"
+//   export (2026-10-06), which was built on v0.29 (not v0.30 - typed
+//   into STEP7 before this file's stabilization work existed) and
+//   replaced this file's content wholesale. Re-applied v0.30's
+//   stabilization logic on top of his real edits below, and adopted his
+//   genuine changes: RC_K1HOLD_IN_TIME 5s -> 8s (Process ON's K1 hold is
+//   now 8s, not 5s - updates the "~50s" worst-case post-outage pump
+//   delay estimate); RCS3 now also clears Scale_ReCalib_Req as soon as
+//   Process ON starts, not just on full completion; Alarm lamp command
+//   now drives RED_Blink instead of RED_On (alarms blink, don't just
+//   light solid); "INPUTS DB".WHT_SW_1_Pump_Test wired to Glue_Fill_
+//   Pump_Test (closes one of the "still open" HMI-wiring items - the
+//   panel's 3 white lamps/switches are Pump_Test/ReCalib/Alarm_Reset,
+//   confirmed by DB60/DB61's own renames in this same export). Also
+//   caught and fixed a bug in his retyped "White lamp command" network:
+//   the Glue_Fill_Pump_Test branch (WTST) only SET WHT_1, leaving WHT_2/
+//   WHT_3 in the CLR group - would have lit only one of the three test
+//   lamps instead of all three. Reverted to all three under SET.
+//   Added two more switch wirings myself, completing the pattern his
+//   own WHT_SW_1_Pump_Test wiring started: "INPUTS DB".WHT_SW_2_ReCalib
+//   -> Scale_ReCalib_Req, "INPUTS DB".WHT_SW_3_Alarm_Reset -> Reset_
+//   Alarms - closes the other two "still open" HMI-wiring items. Not
+//   confirmed by Michou - flag if these two switches are meant for
+//   something else.
+VERSION : 0.31
 
 
 VAR_TEMP
@@ -119,8 +169,10 @@ VAR_TEMP
   RC_K1HOLD_IN : BOOL ;	
   RC_K2ON_IN : BOOL ;	
   RC_IDLE : BOOL ;	
-  RC_WAIT_IN : BOOL ;	
-  PWROFF_IN : BOOL ;	
+  RC_WAIT_IN : BOOL ;
+  PWROFF_IN : BOOL ;
+  STARTUP_IN : BOOL ;
+  RC_TRIG : BOOL ;
 END_VAR
 BEGIN
 NETWORK
@@ -199,9 +251,14 @@ TITLE =Timers - compute each IN condition, CALL FB555 "IEC_TIMERS" once
       ==I   ; 
       =     #RC_IDLE; 
 
-      A     "GLUE SCALE CONTROL DB".Scale_PowerOFF_Pulse; 
-      A     #RC_IDLE; 
-      =     #PWROFF_IN; 
+      A     "GLUE SCALE CONTROL DB".Scale_PowerOFF_Pulse;
+      A     #RC_IDLE;
+      =     #PWROFF_IN;
+
+      A     "GLUE SCALE CONTROL DB".PowerUp_Settled; // FALSE for exactly the first scan after OB100 resets it, TRUE forever after - see DB105/OB100 headers
+      =     #STARTUP_IN;
+      SET   ;
+      S     "GLUE SCALE CONTROL DB".PowerUp_Settled;
 
       CALL "IEC TIMERS" , "IEC TIMERS DB" (
            LAMP_IN                  := #LAMP_IN,
@@ -217,7 +274,9 @@ TITLE =Timers - compute each IN condition, CALL FB555 "IEC_TIMERS" once
            PWRON_IN                 := #RC_WAIT_IN,
            PWRON_IN_TIME            := T#3S,
            PWROFF_IN                := #PWROFF_IN,
-           PWROFF_IN_TIME           := T#3S);
+           PWROFF_IN_TIME           := T#3S,
+           STARTUP_IN               := #STARTUP_IN,
+           STARTUP_IN_TIME          := T#30S);
 
 NETWORK
 TITLE =Compute transfered weight and mirror bottomer velocity to HMI DB
@@ -456,10 +515,26 @@ TITLE =Overfill/Underfill interlock - blocks the pump while either is l
 // an immediate stop - both read the same way: force Pump_ON off and
 // keep it off while either alarm (or Alarm_ScaleFault) is latched,
 // until Reset_Alarms clears it.
-      A     "GLUE SCALE CONTROL DB".Alarm_Overfill; 
-      O     "GLUE SCALE CONTROL DB".Alarm_Underfill; 
-      O     "GLUE SCALE CONTROL DB".Alarm_ScaleFault; 
-      R     "GLUE SCALE CONTROL DB".Pump_ON; 
+      A     "GLUE SCALE CONTROL DB".Alarm_Overfill;
+      O     "GLUE SCALE CONTROL DB".Alarm_Underfill;
+      O     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
+      R     "GLUE SCALE CONTROL DB".Pump_ON;
+
+NETWORK
+TITLE =Power-up/recalibration interlock - blocks the pump until the scale has completed a recalibration since the last restart
+// Scale_Calibrated is reset FALSE by OB100 on every PLC restart (see
+// that file) and only SET TRUE once "Power-on + calibrate sequence"
+// below completes (RCS5) - so the pump can't run until the scale has
+// actually been recalibrated since the last power-up. Also blocks it
+// while ReCalib_Step is non-zero (any recalibration actively running,
+// manual or the v0.30 auto-trigger), not just right after a restart.
+      AN    "GLUE SCALE CONTROL DB".Scale_Calibrated;
+      R     "GLUE SCALE CONTROL DB".Pump_ON;
+
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     0;
+      <>I   ;
+      R     "GLUE SCALE CONTROL DB".Pump_ON;
 
 NETWORK
 TITLE =Exit point for parse-error skip
@@ -467,9 +542,15 @@ TITLE =Exit point for parse-error skip
 SKIP: NOP   0; 
 
 NETWORK
+TITLE =Alarm reset switch -> Reset_Alarms (completes Michou's WHT_SW_1_Pump_Test wiring pattern, v0.31, not yet confirmed)
+
+      A     "INPUTS DB".WHT_SW_3_Alarm_Reset;
+      =     "GLUE SCALE CONTROL DB".Reset_Alarms;
+
+NETWORK
 TITLE =Reset latched alarms - HMI-driven, runs regardless OF this scan'
 
-      A     "GLUE SCALE CONTROL DB".Reset_Alarms; 
+      A     "GLUE SCALE CONTROL DB".Reset_Alarms;
       R     "GLUE SCALE CONTROL DB".Alarm_Overfill; 
       R     "GLUE SCALE CONTROL DB".Alarm_Underfill; 
       R     "GLUE SCALE CONTROL DB".Alarm_ScaleFault; 
@@ -501,17 +582,28 @@ TITLE =White lamp command -> PANEL LED CMD DB (FC158)
       =     "PANEL LED CMD DB".WHT_3; 
       JU    WCDN; 
 
-WTST: CLR   ; 
-      =     "PANEL LED CMD DB".WHT_ScanFwd; 
-      =     "PANEL LED CMD DB".WHT_ScanRev; 
-      =     "PANEL LED CMD DB".WHT_2; 
-      =     "PANEL LED CMD DB".WHT_3; 
-//;
-      SET   ; 
-      =     "PANEL LED CMD DB".WHT_1; 
+WTST: CLR   ; // v0.31 fix: Michou's retyped version only SET WHT_1 here (WHT_2/WHT_3 stayed in this CLR group) - would light only one of three test lamps. Restored all three under SET below.
+      =     "PANEL LED CMD DB".WHT_ScanFwd;
+      =     "PANEL LED CMD DB".WHT_ScanRev;
 
+      SET   ;
+      =     "PANEL LED CMD DB".WHT_1;
+      =     "PANEL LED CMD DB".WHT_2;
+      =     "PANEL LED CMD DB".WHT_3;
 
-WCDN: NOP   0; 
+WCDN: NOP   0;
+
+NETWORK
+TITLE =Recalibration switch -> Scale_ReCalib_Req (one-shot per press, v0.31, not yet confirmed)
+// NOT a level-mirror like the Pump_Test wiring above - RCS3 (below)
+// explicitly R's Scale_ReCalib_Req once Process ON starts, so a
+// continuous mirror of a still-held switch would just re-assert it
+// right back the very next scan and defeat that clear. SETs once per
+// switch rising edge (FP 201.4) instead; the sequence/FP 201.1 below
+// clear it again for the next press.
+      A     "INPUTS DB".WHT_SW_2_ReCalib;
+      FP    "FP 201.4";
+      S     "GLUE SCALE CONTROL DB".Scale_ReCalib_Req;
 
 NETWORK
 TITLE =Power-on + calibrate sequence ("Process ON" = K1+K2 simultaneous
@@ -536,21 +628,29 @@ TITLE =Power-on + calibrate sequence ("Process ON" = K1+K2 simultaneous
 //   timer, repurposed here since Scale_PowerON_Pulse no longer needs
 //   its own separate timer), 3 Process ON: K1 on + K2 0.5s pulse BOTH
 //   START THIS STEP (RC_K2ON_OUT and RC_K1HOLD_OUT both begin here), 4
-//   waiting for RC_K1HOLD_OUT's 5s (which started back in step 3) to
+//   waiting for RC_K1HOLD_OUT's 8s (which started back in step 3) to
 //   elapse, 5 K1 off, Scale_PowerON_Pulse cleared, done.
-      A     "GLUE SCALE CONTROL DB".Scale_ReCalib_Req; 
-      FP    "FP 201.1"; 
-      JCN   RCCH; 
+      A     "GLUE SCALE CONTROL DB".Scale_ReCalib_Req;
+      FP    "FP 201.1";
+      =     #RC_TRIG;
 
-      L     "GLUE SCALE CONTROL DB".ReCalib_Step; 
-      L     0; 
-      <>I   ; 
-      JC    RCCH; 
+      A     "IEC TIMERS DB".STARTUP_OUT; // auto-trigger a full recalibration once, 30s after every restart - "restart the scale" (Michou, 2026-10-06)
+      FP    "FP 201.3";
+      O     #RC_TRIG;
+      =     #RC_TRIG;
 
-      L     1; 
-      T     "GLUE SCALE CONTROL DB".ReCalib_Step; 
+      A     #RC_TRIG;
+      JCN   RCCH;
 
-RCCH: A     "GLUE SCALE CONTROL DB".Scale_PowerON_Pulse; 
+      L     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     0;
+      <>I   ;
+      JC    RCCH;
+
+      L     1;
+      T     "GLUE SCALE CONTROL DB".ReCalib_Step;
+
+RCCH: A     "GLUE SCALE CONTROL DB".Scale_PowerON_Pulse;
       JCN   RCST; 
 
       L     "GLUE SCALE CONTROL DB".ReCalib_Step; 
@@ -622,14 +722,16 @@ RCS4: A     "IEC TIMERS DB".RC_K1HOLD_OUT;
       T     "GLUE SCALE CONTROL DB".ReCalib_Step; 
       JU    RCDN; 
 
-RCS5: SET   ; 
-      R     "OUTPUTS DB".KILOTECK_Calib_K1; 
-      CLR   ; 
-      =     "GLUE SCALE CONTROL DB".Scale_PowerON_Pulse; 
-      L     0; 
-      T     "GLUE SCALE CONTROL DB".ReCalib_Step; 
+RCS5: SET   ;
+      R     "OUTPUTS DB".KILOTECK_Calib_K1;
+      CLR   ;
+      =     "GLUE SCALE CONTROL DB".Scale_PowerON_Pulse;
+      L     0;
+      T     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      SET   ;
+      S     "GLUE SCALE CONTROL DB".Scale_Calibrated;
 
-RCDN: NOP   0; 
+RCDN: NOP   0;
 
 NETWORK
 TITLE =Manual power-off pulse - 3S K2 pulse ON Scale_PowerOFF_Pulse, au

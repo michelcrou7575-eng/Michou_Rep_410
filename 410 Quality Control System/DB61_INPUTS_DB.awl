@@ -1,6 +1,21 @@
 DATA_BLOCK "INPUTS DB"
-TITLE = DB61
-VERSION : 0.1
+TITLE =Shared digital inputs (multiple 410 subsystems)
+// v0.1 - raw export as uploaded (2026-10-01). Not touched by the
+//   glue-scale/KWS CY300 work - tracked simply because it's shared
+//   alongside DB60.
+// v0.2 - Michou re-exported this DB directly from STEP7 (2026-10-06,
+//   "Refactor glue scale logic" commit), trimming the speculative
+//   placeholder tail to the project's real declared size and renaming
+//   the 3 panel switches with their real function: WHT_SW_1 ->
+//   WHT_SW_1_Pump_Test, WHT_SW_2 -> WHT_SW_2_ReCalib, WHT_SW_3 ->
+//   WHT_SW_3_Alarm_Reset - matches DB60's matching white-lamp rename.
+//   FC155 v0.31 wires WHT_SW_1_Pump_Test (Michou's own edit) and
+//   WHT_SW_2_ReCalib/WHT_SW_3_Alarm_Reset (my own completion of the
+//   same pattern, not yet confirmed) to Glue_Fill_Pump_Test/Scale_
+//   ReCalib_Req/Reset_Alarms respectively. This repo's own header
+//   comment was lost in that export - restored here, content otherwise
+//   taken as-is from the live re-export (newer upload wins).
+VERSION : 0.2
 
 
   STRUCT 	

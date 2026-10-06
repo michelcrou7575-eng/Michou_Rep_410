@@ -1,6 +1,28 @@
 DATA_BLOCK "OUTPUTS DB"
-TITLE = DB60
-VERSION : 0.1
+TITLE =Shared digital outputs (multiple 410 subsystems)
+// History (full blow-by-blow in git log):
+// v0.1-v0.4: reconciled from Michou's raw export plus repeated FC155
+//   uploads - KILOTECK_Calib_K1/KILOTECK_Power_K2 (were Output_061/062),
+//   RED_LED_Pnl/GRN_LED_Pnl/WHT_SWL_1/2/3_Pnl (confirmed real via
+//   compile errors), Output_060 -> Pump_Out_Valve.
+// v0.5 - Michou re-exported this DB directly from STEP7 (2026-10-06,
+//   "Refactor glue scale logic" commit), which trimmed the speculative
+//   placeholder tail to the project's real declared size and renamed
+//   several fields with their actual real-world function, richer than
+//   this repo had guessed:
+//   - WHT_SWL_1_Pnl -> WHT_SWL_1_Pnl_Pump_Test, WHT_SWL_2_Pnl ->
+//     WHT_SWL_2_Pnl_Calib, WHT_SWL_3_Pnl -> WHT_SWL_3_Pnl_Alrm_Ack -
+//     confirms what these 3 white panel lamps actually indicate (mirror
+//     the 3 panel switches - see DB61's matching rename).
+//   - Pump_Out_Valve -> Pump_Out.
+//   - KILOTECK_Calib_K1/KILOTECK_Power_K2 comments gained real detail
+//     ("390-330 Ohms" shunt-cal resistance, I/O card address "G22
+//     ET-200B 8/8 (ADD7)").
+//   This repo's own header/changelog comments were lost in that export
+//   (STEP7 re-exports only what it has, not this file's own git
+//   history) - restored here, content otherwise taken as-is from the
+//   live re-export (newer upload wins).
+VERSION : 0.5
 
 
   STRUCT 	

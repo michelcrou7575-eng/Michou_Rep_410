@@ -1,4 +1,4 @@
-FUNCTION_BLOCK "IEC_TIMERS"
+FUNCTION_BLOCK "IEC TIMERS"
 TITLE =IEC Timers
 // v0.2 - Michou's own design (2026-10-03), per his question "Instead of
 //   an FC, why not call all SFB4 inside an FB (with it's own instance
@@ -44,7 +44,16 @@ TITLE =IEC Timers
 //   fresh restart). See FC155 v0.30 for how STARTUP_OUT auto-triggers
 //   the recalibration sequence and DB105 v0.18 / OB100's own changelog
 //   for the full reasoning.
-VERSION : 0.4
+//
+// v0.5 - Michou renamed this block's own symbol directly in STEP7,
+//   matching his convention for every other named block in the project
+//   (spaces, not underscores - "OUTPUTS DB", "GLUE SCALE CONTROL DB",
+//   "PANEL LED CMD DB", etc.): "IEC_TIMERS" -> "IEC TIMERS". Reconciled
+//   here after his "Refactor glue scale logic" export (2026-10-06)
+//   showed FC155 already calling it by the new name. Rename only, no
+//   logic change - see DB106's own changelog for the matching instance-
+//   DB rename.
+VERSION : 0.5
 
 
 VAR_INPUT
