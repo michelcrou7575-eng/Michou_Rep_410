@@ -264,17 +264,22 @@ here - rename only, no behavior change from what's described below.
   neither bit means off.
 - **`FB556 "PANEL LED TIMERS"` / `"PANEL LED TIMERS DB"` (DB556)** — same
   multi-instance `"TON"` wrapper pattern as FB555/DB555 (see the hard-
-  limits section above for why), called once per scan from FC158. Three
-  clocks: SCAN (500ms, white-lamp scan pacing), PANIC (150ms, deliberately
-  faster/"impressive"), ALARM (500ms, shared by GRN and RED blink — so if
-  both ever blink at once they blink in sync; my own choice, not asked for
-  explicitly, flagging it).
-- **Who calls it**: FC155 sets `WHT_ScanFwd`/`WHT_1`/`WHT_2`/`WHT_3` (lamp
-  scan while pumping, independent-all-on for `Glue_Fill_Pump_Test`) and
-  `GRN_On`/`RED_Blink` (alarm state), then `CALL`s FC158 itself — no OB1
-  edit needed, FC158 just rides FC155's existing scan-cycle call. FC155
-  never touches `WHT_Panic`/`GRN_Blink`/`RED_On`, so those stay free for
-  independent HMI/manual/test-table control without FC155 fighting them.
+  limits section above for why), called once per scan from FC158. Two
+  live clocks now: SCAN (500ms, white-lamp scan pacing), PANIC (150ms,
+  deliberately faster/"impressive"). A third, ALARM, paced GRN/RED blink
+  until v0.4 (2026-10-06) — its self-oscillating pattern only held Q
+  true for one scan every 500ms (~2% duty cycle: a brief flash, not a
+  blink — Michou: "the RED Lamp is pulsing when Fault! Need Blinking!").
+  GRN/RED blink now reads `"M 6.5"` directly (a clock-memory bit, same
+  one used for the Calib-lamp blink — a real 50/50 square wave).
+  `TON_ALARM`/`ALARM_OUT` are left declared in FB556, unused.
+- **Who calls it**: FC155 sets `WHT_ScanFwd`/`WHT_1` (lamp scan while
+  pumping, `WHT_1` only for `Glue_Fill_Pump_Test` — see "Manual test and
+  indicator lamps" above) and `GRN_On`/`RED_Blink` (alarm state), then
+  `CALL`s FC158 itself — no OB1 edit needed, FC158 just rides FC155's
+  existing scan-cycle call. FC155 never touches `WHT_Panic`/`GRN_Blink`/
+  `RED_On`, so those stay free for independent HMI/manual/test-table
+  control without FC155 fighting them.
 - **Not yet done**: no HMI control wired to `WHT_Panic`/`GRN_Blink` yet —
   Michou asked for the capability, not a specific trigger; needs a
   screen/button decision. Not bench-verified (compiles cleanly against
@@ -585,18 +590,21 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   their real function (`WHT_SW_1_Pump_Test`/`WHT_SW_2_ReCalib`/`WHT_SW_
   3_Alarm_Reset`) - now wired into FC155, see "Power-up calibration
   workaround" above.
-- `FC158 SCALE PANEL LAMPS` — version 0.3. Standalone, reusable
+- `FC158 SCALE PANEL LAMPS` — version 0.4. Standalone, reusable
   panel-lamp driver (white-lamp scan fwd/rev/independent/panic, GRN/RED
   solid/blink) for the 5 lamp bits in DB60. Built as FC157 "PANEL LED
   DRIVE"; renumbered/renamed by Michou (2026-10-06) because FC157 wasn't
-  actually free on the live project. See "Panel LED drive" above.
+  actually free on the live project. GRN/RED blink reads `"M 6.5"`
+  directly as of v0.4, not FB556's own ALARM clock. See "Panel LED
+  drive" above.
 - `DB107_PANEL_LED_CMD_DB.awl` — version 0.2. `"PANEL LED CMD DB"`
   (DB107), FC158's command/status interface — named command bits, not a
   packed mode byte. See "Panel LED drive" above.
-- `FB556_PANEL_LED_TIMERS.awl` — version 0.3. `"PANEL LED TIMERS"`
+- `FB556_PANEL_LED_TIMERS.awl` — version 0.4. `"PANEL LED TIMERS"`
   (renamed from "PANEL_LED_TIMERS" by Michou, spaces not underscores).
-  Same multi-instance `"TON"` wrapper pattern as FB555 — 3 clocks
-  (scan/panic/alarm-blink) for FC158, called once per scan.
+  Same multi-instance `"TON"` wrapper pattern as FB555 — SCAN/PANIC
+  clocks for FC158, called once per scan. `TON_ALARM`/`ALARM_OUT` are
+  dead as of v0.4 (left declared, unused) - see "Panel LED drive" above.
 - `DB556_PANEL_LED_TIMERS_DB.awl` — version 0.3. `"PANEL LED TIMERS DB"`,
   the single instance DB for FB556, called once from FC158's "Timers"
   network. Renamed to match FB556's symbol, then renumbered DB108 ->

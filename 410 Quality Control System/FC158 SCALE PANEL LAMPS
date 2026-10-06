@@ -34,13 +34,24 @@ TITLE =Panel LED drive - GRN/RED/WHTx3 command-driven, standalone/reusable
 //   is renumbered DB108 -> DB556 (matching FB556's own number) - this
 //   file's CALL/field references updated to match (see FB556/
 //   DB556_PANEL_LED_TIMERS_DB.awl's own changelogs).
-VERSION : 0.3
+//
+// v0.4 - per Michou (2026-10-06): "the RED Lamp is pulsing when Fault!
+//   Need Blinking!" FB556's self-oscillating ALARM_IN/ALARM_OUT pattern
+//   (same idiom as SCAN/PANIC) only holds Q true for ONE scan every
+//   500ms (~2% duty cycle) - fine for a clock PULSE driving a step
+//   counter, wrong for directly driving a lamp someone needs to actually
+//   see: it reads as a brief flash, not a 50/50 blink. Green/Red lamps
+//   now read "M 6.5" directly instead - the same clock-memory bit
+//   Michou already used for the Calib-lamp blink (v0.33/v0.34), a real
+//   50/50 square wave. ALARM_IN is no longer computed/passed to FB556;
+//   TON_ALARM/ALARM_OUT are left declared there but unused - see that
+//   file's own changelog.
+VERSION : 0.4
 
 
 VAR_TEMP
   SCAN_IN : BOOL ;
   PANIC_IN : BOOL ;
-  ALARM_IN : BOOL ;
 END_VAR
 BEGIN
 NETWORK
@@ -55,18 +66,11 @@ TITLE =Timers - compute each clock's IN condition, CALL FB556 "PANEL LED TIMERS"
       AN    "PANEL LED TIMERS DB".PANIC_OUT;
       =     #PANIC_IN;
 
-      A     "PANEL LED CMD DB".GRN_Blink;
-      O     "PANEL LED CMD DB".RED_Blink;
-      AN    "PANEL LED TIMERS DB".ALARM_OUT;
-      =     #ALARM_IN;
-
       CALL "PANEL LED TIMERS" , "PANEL LED TIMERS DB" (
            SCAN_IN                  := #SCAN_IN,
            SCAN_IN_TIME             := T#500MS,
            PANIC_IN                 := #PANIC_IN,
-           PANIC_IN_TIME            := T#150MS,
-           ALARM_IN                 := #ALARM_IN,
-           ALARM_IN_TIME            := T#500MS);
+           PANIC_IN_TIME            := T#150MS);
 
 NETWORK
 TITLE =White lamp scan step - advances on each SCAN clock pulse, FWD or REV, resets to 1 when idle
@@ -165,7 +169,7 @@ TITLE =Green lamp - Blink overrides On/solid, neither = off
       =     "OUTPUTS DB".GRN_LED_Pnl;
       JU    GLDN;
 
-GBLK: A     "PANEL LED TIMERS DB".ALARM_OUT;
+GBLK: A     "M 6.5"; // clock-memory bit, same rate as the Calib-lamp blink (see FC155) - real 50/50 square wave, not FB556's ALARM_OUT
       =     "OUTPUTS DB".GRN_LED_Pnl;
 
 GLDN: NOP   0;
@@ -180,7 +184,7 @@ TITLE =Red lamp - Blink overrides On/solid, neither = off
       =     "OUTPUTS DB".RED_LED_Pnl;
       JU    RLDN;
 
-RBLK: A     "PANEL LED TIMERS DB".ALARM_OUT;
+RBLK: A     "M 6.5"; // clock-memory bit, same rate as the Calib-lamp blink (see FC155) - real 50/50 square wave, not FB556's ALARM_OUT
       =     "OUTPUTS DB".RED_LED_Pnl;
 
 RLDN: NOP   0;

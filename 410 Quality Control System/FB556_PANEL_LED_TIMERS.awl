@@ -34,7 +34,17 @@ TITLE =Panel LED clocks for FC158 "SCALE PANEL LAMPS"
 //   is renumbered DB108 -> DB556 (matching this FB's own number, his
 //   preferred convention) - see DB556_PANEL_LED_TIMERS_DB.awl's own
 //   changelog. No change to this file itself.
-VERSION : 0.3
+//
+// v0.4 - per Michou (2026-10-06): "the RED Lamp is pulsing when Fault!
+//   Need Blinking!" The self-oscillating ALARM pattern only holds Q true
+//   for ONE scan every PT (~2% duty cycle) - fine for a clock pulse
+//   driving a step counter (SCAN/PANIC's own use), wrong for directly
+//   driving a lamp someone needs to see blink. FC158 now reads "M 6.5"
+//   (a clock-memory bit) directly for GRN/RED blink instead, and no
+//   longer calls ALARM_IN/ALARM_IN_TIME. TON_ALARM/ALARM_OUT are DEAD as
+//   of this version - left declared (not deleted, in case something
+//   else starts depending on them) but nothing feeds or reads them.
+VERSION : 0.4
 
 
 VAR_INPUT
