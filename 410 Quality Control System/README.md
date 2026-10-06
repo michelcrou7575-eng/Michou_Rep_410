@@ -440,9 +440,24 @@ block number picked this session.
   called once per scan.
 - `DB108_PANEL_LED_TIMERS_DB.awl` — version 0.1. The single instance DB
   for FB556, called once from FC157's "Timers" network.
+- `OB100_COMPLETE_RESTART.awl` — version 0.1. Forces this project's own
+  state (ReCalib_Step, latched alarms, HMI trigger pulses, the live
+  weight reading, Panel LED command bits) back to a safe idle default on
+  every PLC restart - DB "actual values" otherwise survive a power cycle
+  battery/cap-backed, so without this a reboot mid-recalibration would
+  resume as if nothing happened while the relays are actually
+  de-energized. Does **not** touch operator setpoints. **See "Still
+  open" - may need to be merged into an already-existing OB100** rather
+  than used as-is, since a project can only have one.
 
 ## Still open
 
+- **Confirm whether OB100 already exists on the live PLC project.** This
+  repo can't see the whole project - if it does, `OB100_COMPLETE_RESTART.
+  awl`'s 3 networks need to be pasted into the end of that existing
+  block, not downloaded as a replacement (would silently delete whatever
+  else it resets for other 410 subsystems). If it doesn't exist yet,
+  this file can be used as-is.
 - HMI button/screen wiring to pulse `Reset_Alarms` — the PLC-side reset
   logic exists, nothing drives the bit yet.
 - FC157's white-lamp scan (now driven by FB556's clock, superseding

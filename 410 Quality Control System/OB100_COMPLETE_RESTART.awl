@@ -1,0 +1,88 @@
+ORGANIZATION_BLOCK "COMPLETE RESTART"
+TITLE =Force glue-scale / Panel LED state to safe idle on every PLC restart
+// v0.1 - NEW, per Michou's request (2026-10-06): "need to reset
+//   everything when PLC reboots." S7-300 DB "actual values" are
+//   battery/cap-backed and survive a power cycle - without this, a
+//   reboot mid-recalibration would leave ReCalib_Step stuck mid-sequence
+//   while K1/K2 are physically de-energized (CPU zeroes the output
+//   process image on every restart, before this OB even runs), and any
+//   latched alarms or Panel LED test bits would resume as if nothing
+//   happened. Networks below force this repo's own state fields back to
+//   a safe idle/off default. Operator setpoints (Fill_Start_SP,
+//   Fill_Stop_SP, AlarmLimit_*_SP, PlatformMinWeight_SP,
+//   NegativeUnderScore_Value) are deliberately NOT touched here - those
+//   are calibration, not state, and must survive a reboot.
+//
+//   IMPORTANT: OB100 can only exist once in the whole project. If the
+//   live PLC already has an OB100 (very likely, for other 410
+//   subsystems' own restart logic this repo can't see), these networks
+//   need to be appended to the END of that existing OB100, not used to
+//   replace it - downloading this file as a fresh OB100 would silently
+//   delete whatever else it already does. Flagged, not resolved - needs
+//   Michou to confirm whether OB100 already exists online.
+VERSION : 0.1
+
+
+VAR_TEMP
+  OB100_EV_CLASS : BYTE ;
+  OB100_STRTUP : BYTE ;
+  OB100_PRIORITY : BYTE ;
+  OB100_OB_NUMBR : BYTE ;
+  OB100_RESERVED_1 : BYTE ;
+  OB100_RESERVED_2 : BYTE ;
+  OB100_STOP : WORD ;
+  OB100_STRT_INFO : DWORD ;
+  OB100_DATE_TIME : DATE_AND_TIME ;
+END_VAR
+BEGIN
+NETWORK
+TITLE =Glue scale - clear latched alarms, HMI trigger pulses, and mid-sequence state (see FC155)
+
+      R     "GLUE SCALE CONTROL DB".Pump_ON;
+      R     "GLUE SCALE CONTROL DB".Alarm_Overfill;
+      R     "GLUE SCALE CONTROL DB".Alarm_Underfill;
+      R     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
+      R     "GLUE SCALE CONTROL DB".ParseError;
+      R     "GLUE SCALE CONTROL DB".Pump_ON_Prev;
+      R     "GLUE SCALE CONTROL DB".Scale_Powered_On;
+      R     "GLUE SCALE CONTROL DB".Reset_Alarms;
+      R     "GLUE SCALE CONTROL DB".Scale_PowerOFF_Pulse;
+      R     "GLUE SCALE CONTROL DB".Scale_ReCalib_Req;
+      R     "GLUE SCALE CONTROL DB".Scale_PowerON_Pulse;
+      R     "GLUE SCALE CONTROL DB".LampScanClockMem;
+
+      L     0;
+      T     "GLUE SCALE CONTROL DB".ReCalib_Step;
+      L     1;
+      T     "GLUE SCALE CONTROL DB".LampScanStep;
+      L     -20663;
+      T     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
+      L     0;
+      T     "GLUE SCALE CONTROL DB".GrossWeight_Actual_Mem;
+      L     0;
+      T     "GLUE SCALE CONTROL DB".Actual_Transfered_Weight;
+
+NETWORK
+TITLE =KILOTECK relays - force off explicitly (belt-and-suspenders; the CPU already zeroes physical outputs on restart)
+
+      R     "OUTPUTS DB".KILOTECK_Calib_K1;
+      R     "OUTPUTS DB".KILOTECK_Power_K2;
+
+NETWORK
+TITLE =Panel LED command bits - force idle, see FC157/DB107 (any caller must re-request behavior after a reboot)
+
+      R     "PANEL LED CMD DB".WHT_ScanFwd;
+      R     "PANEL LED CMD DB".WHT_ScanRev;
+      R     "PANEL LED CMD DB".WHT_Panic;
+      R     "PANEL LED CMD DB".WHT_1;
+      R     "PANEL LED CMD DB".WHT_2;
+      R     "PANEL LED CMD DB".WHT_3;
+      R     "PANEL LED CMD DB".GRN_On;
+      R     "PANEL LED CMD DB".GRN_Blink;
+      R     "PANEL LED CMD DB".RED_On;
+      R     "PANEL LED CMD DB".RED_Blink;
+
+      L     1;
+      T     "PANEL LED CMD DB".WHT_ScanStep;
+
+END_ORGANIZATION_BLOCK
