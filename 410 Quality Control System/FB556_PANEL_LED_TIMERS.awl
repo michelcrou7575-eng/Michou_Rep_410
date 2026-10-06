@@ -1,5 +1,5 @@
 FUNCTION_BLOCK "PANEL LED TIMERS"
-TITLE =Panel LED clocks for FC158 "SCALE PANEL LAMPS"
+TITLE =Panel LED clocks for FC158 "SCALE PANEL LAMPS" FB556
 // v0.1 - NEW, same multi-instance "TON" wrapper pattern as FB555
 //   IEC_TIMERS (Michou's own design - one FB, one instance DB, called
 //   once per scan, every timer's IN recomputed fresh every scan - see
