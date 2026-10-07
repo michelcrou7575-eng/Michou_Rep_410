@@ -147,8 +147,8 @@ acting on a bad telegram.
 - **Overfill/Underfill interlock**: while `Alarm_Overfill` OR
   `Alarm_Underfill` OR `Alarm_PossibleLeak` (v0.36) is latched, `Pump_ON`
   is forced off and held off (blocks automatic re-engagement) until
-  `Reset_Alarms` clears the alarm.
-- **Reset_Alarms**: HMI-driven input bit. While TRUE, clears
+  `Alarms_Acknowledge` clears the alarm.
+- **Alarms_Acknowledge**: HMI-driven input bit. While TRUE, clears
   `Alarm_Overfill`, `Alarm_Underfill`, `Alarm_ScaleFault` and (v0.36)
   `Alarm_PossibleLeak` together every scan (level-conditioned, not edge
   — safe as a momentary acknowledge button, since any alarm whose fault
@@ -158,7 +158,7 @@ acting on a bad telegram.
   always be cleared. The PLC side is wired; connecting an actual HMI
   button to this bit is still open.
 
-## Leak detection (v0.36, FB555 v0.7, DB105 v0.20)
+## Leak detection (FC155 v0.39, FB555 v0.7, DB105 v0.23, "HMI DB" v0.4)
 
 Per Michou (2026-10-06): *"Underfill Alarm should go off even when pump
 is running! Could be a leak! Should stop the Pump like overfilled! ...
@@ -166,40 +166,65 @@ there should be a timing alarm too: If Fill take too long or if the
 glue Barrel (Container on the scale) is emptying too fast ... could be
 a leak also. We need to forsee any/every scenario that could cause a
 disaster (Glue spill!!!)."* Three new networks, right after "Pump
-control":
+control". All three are now HMI-adjustable (v0.37-v0.39 — renamed to
+match Michou's own live DB105 refactor, then wired to his real "HMI DB"
+fields):
 
 - **Fill stall detection** — while `Pump_ON`, the weight should be
-  rising. `FillStall_Ref` (DB105, internal) reseeds to the current
+  rising. `Fill_Rise_Ref` (DB105, internal) reseeds to the current
   weight every time `Pump_ON` has a rising edge (same place
-  `GrossWeight_Actual_Mem` already snapshots) and again every time at
-  least `FillStallMinRise_SP` kg of progress is detected — this
-  naturally resets a watchdog timer (`FB555`'s `TON_FILLSTALL`) each
-  time real progress happens, so it only accumulates during a genuine
-  stall. If 60s (placeholder, hardcoded in FC155's "Timers" like every
-  other timer duration in this file) passes with no progress, it sets
+  `GrossWeight_Actual_Mem` already snapshots) and again every time
+  enough progress is detected — this naturally resets a watchdog timer
+  (`FB555`'s `TON_FILLSTALL`) each time real progress happens, so it
+  only accumulates during a genuine stall. If 60s (placeholder,
+  hardcoded in FC155's "Timers") passes with no progress, it sets
   **`Alarm_Underfill`** — reused, not a new alarm identity, per
-  Michou's own wording — which already interlocks `Pump_ON` off via the
-  network above, same as overfill.
+  Michou's own wording. `Fill_Rise_Min_SP` is an HMI setpoint in
+  **grams/min** (real default 1500) — FC155's "Timers" converts it to
+  a kg threshold over the fixed 60s window (INT division by 1000),
+  floored at 1kg so a setting under 1000 g/min can't silently disable
+  the check by rounding the threshold to 0.
 - **Fill timeout** — complements the stall check: `Pump_ON` continuously
-  for 5 minutes (placeholder), regardless of whether some progress is
-  still happening, also sets `Alarm_Underfill`. Catches an abnormally
-  slow fill that never quite triggers the stall check (weight keeps
-  inching up, just far slower than normal).
+  for `Normal_Fill_Time_SP` minutes (HMI setpoint, real default 300 =
+  5h; 0 means disabled — a defensive fallback, not Michou's actual
+  operating default), regardless of whether some progress is still
+  happening, also sets `Alarm_Underfill`. Catches an abnormally slow
+  fill that never quite triggers the stall check. The INT-minutes
+  setpoint is converted to a `TIME` value in "Timers" (`ITD` then
+  `*L#60000` — `TIME`'s internal representation is itself a DINT ms
+  count, so the product can be stored directly).
 - **Possible leak** — a genuinely different scenario, running during
-  *normal operation* (`Pump_ON` false), not during a fill: every 30s
-  (placeholder) while idle, if weight has dropped more than
-  `MaxDrainDrop_SP` kg (5kg placeholder) since the last check, sets a
+  *normal operation* (`Pump_ON` false), not during a fill: sets a
   **new** alarm, `Alarm_PossibleLeak` (not reused `Alarm_Underfill` —
-  stopping the fill pump wouldn't do anything, it isn't running).
-  Latches, interlocks `Pump_ON` off, cleared by `Reset_Alarms`, drives
-  the RED panel lamp like the other three alarms.
+  stopping the fill pump wouldn't do anything, it isn't running), if
+  weight drops more than a fixed 1kg margin within a check window.
+  `Drain_Drop_Max_SP` is an HMI setpoint in **grams/min** (real default
+  120) — unlike the stall check, a fixed window couldn't survive simple
+  floor-clamping at this rate (120 g/min over a flat 30s window rounds
+  to 0kg, meaning the alarm would fire on ordinary scale noise
+  constantly) — see "Unit conversion bug" below. Instead, "Timers"
+  computes a **dynamic window**: the time it would take the configured
+  rate to drop exactly 1kg, clamped to [10s, 30min]. The per-scan
+  comparison then just checks the fixed 1kg margin, with the SP fully
+  absorbed into the window length. Latches, interlocks `Pump_ON` off,
+  cleared by `Alarms_Acknowledge`, drives the RED panel lamp like the
+  other three alarms.
 
-**All thresholds/durations above are placeholders** — this repo has no
-way to know the real fill rate or normal idle glue-consumption rate.
-`FillStallMinRise_SP`/`MaxDrainDrop_SP` are HMI-writable DB105 setpoints
-(tune from there); the three new `TIME` literals live in FC155's
-"Timers" network (hardcoded, like every other timer duration in this
-file — none of those are HMI-adjustable either, kept consistent).
+### Unit-conversion bug, found via Michou's real "HMI DB" export (FC155 v0.39)
+
+Michou's real live DB10 ("This is evolutive!", 2026-10-07) revealed
+`Fill_Rise_Min_SP`/`Drain_Drop_Max_SP` are **grams/min**, not kg as
+first assumed — `GrossWeight_Actual` is whole-kg resolution (the
+scale's own decimal digit is discarded before this file ever sees it),
+so comparing a raw gram/min rate against it directly would have been
+badly broken. At the real defaults, "Fill stall detection"'s fixed 60s
+window degraded to a survivable 1kg threshold (just imprecise), but
+"Possible leak"'s fixed 30s window degraded all the way to 0kg — the
+alarm would have fired on ordinary scale noise, continuously, the
+entire time the scale sat idle. Fixed with two different techniques
+(a floor for the stall check, a dynamic window for the leak check — see
+above) since a single floor would have distorted the leak check's
+sensitivity roughly 8x at the real default rate.
 
 **Not implemented, confirmed deferred (Michou, 2026-10-06)**: Michou's
 closing line — *"could cause ... machine feed to interrupt"* — asked
@@ -359,9 +384,14 @@ unconditionally (not gated by ParseError/Alarm_ScaleFault) unless noted:
 
 - `Fill_Start_Weight_SP` → `Fill_Start_SP`, `Fill_Stop_Weight_SP` →
   `Fill_Stop_SP`, `AlarmLimit_Overfill_SP` → `AlarmLimit_Overfill_SP`,
-  `AlarmLimit_Underfill_SP` → `AlarmLimit_Underfill_SP` — operator-entered
-  setpoints flow HMI → scale, one-way (the touch panel's own numeric-entry
-  widget is the display of record for what was last typed).
+  `AlarmLimit_Underfill_SP` → `AlarmLimit_Underfill_SP`, `Fill_Rise_Min_SP`
+  → `Fill_Rise_Min_SP`, `Drain_Drop_Max_SP` → `Drain_Drop_Max_SP`,
+  `Normal_Fill_Time_SP` → `Normal_Fill_Time_SP` (v0.37-v0.38, the three
+  leak-detection setpoints — see "Leak detection" above for their units
+  and the unit-conversion bug found against Michou's real export) —
+  operator-entered setpoints flow HMI → scale, one-way (the touch panel's
+  own numeric-entry widget is the display of record for what was last
+  typed).
 - `GrossWeight_Actual` → `Actual_Glue_Weight` — live reading, scale → HMI.
 - `GrossWeight_Actual − GrossWeight_Actual_Mem` → `Actual_Transfered_Weight`
   — see "Transfered weight" above.
@@ -381,6 +411,13 @@ separate `Spare_INT_121/122/123` collapsed to one `Spare_INT`, and bools
 reordered. Since FC155/FC160 reference every field by symbol name (not raw
 offset), this is safe as long as both are recompiled together — already
 true, both were uploaded from the live, working PLC project.
+
+**v0.4 (2026-10-07, "This is evolutive!")**: Michou provided his real live
+DB10 export — this repo's v0.3 struct had 3 leak-detection fields added as
+an unconfirmed guess (for FC155 v0.38's HMI-sync network to even compile);
+replaced wholesale with his real struct. Also gained `Alarm_Acknowledge`,
+`Alarm_ON`, and `PLC_Time` (not referenced by this project's own files,
+presumably owned by FC160/another 410 subsystem).
 
 ## Power-up calibration workaround (KWS CY300 defect, FC155 / DB105 / "OUTPUTS DB")
 
@@ -540,7 +577,7 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   both per Michou's stated durations - neither has been bench-verified
   against an actual power-outage/recovery test yet.
 - `Scale_PowerOFF_Pulse` is wired to nothing yet. `Scale_ReCalib_Req`
-  and `Reset_Alarms` are now wired to `WHT_SW_2_ReCalib`/`WHT_SW_3_
+  and `Alarms_Acknowledge` are now wired to `WHT_SW_2_ReCalib`/`WHT_SW_3_
   Alarm_Reset` (v0.31, my own inference from Michou's own `WHT_SW_1_
   Pump_Test` → `Glue_Fill_Pump_Test` wiring pattern) — **not confirmed
   by Michou**, flag if those two switches are meant for something else.
@@ -581,7 +618,7 @@ FC155/FB555, armed by two bits OB100 resets every restart:
 
 ## Files
 
-- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.36. SFC14 reads,
+- `FC155 GLUE SCALE LOGIC` — canonical source, version 0.39. SFC14 reads,
   ASCII parse (INT weight, decimal digit discarded), pump control with
   overfill/underfill interlock, platform-weight sanity check + scale-fault
   pump interlock, alarm latching and reset, HMI DB bridge (setpoints, live
@@ -622,16 +659,24 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   limits, scale-fault sentinel, platform-weight sanity limit, pump/alarm
   output bits, alarm reset, lamp scan state, power-on/power-off
   sequencing state, (v0.18) the power-up stabilization/calibration-
-  interlock bits, and (v0.20) the leak-detection fields. Version 0.20.
-  Symbol is `"GLUE SCALE CONTROL DB"` (spaces) to match what FC155
-  actually references.
+  interlock bits, and (v0.20) the leak-detection fields. Version 0.23 —
+  v0.21 reconciled field renames against Michou's own live refactor
+  (`Alarms_Acknowledge` was `Reset_Alarms`, `Fill_Rise_Ref`/`Fill_Rise_
+  Min_SP`/`Drain_Drop_Max_SP` renamed to match his convention,
+  `LampScanStep`/`ReCalib_Step` now `BYTE`, dead fields removed); v0.23
+  updated `Fill_Rise_Min_SP`/`Drain_Drop_Max_SP`/`Normal_Fill_Time_SP`'s
+  comments/defaults to match his real "HMI DB" export (grams/min units,
+  300-minute fill-timeout default). Symbol is `"GLUE SCALE CONTROL DB"`
+  (spaces) to match what FC155 actually references.
 - `DB105_Online_1.xps` — STEP7 online DB105 snapshot (2026-09-17) used to
   sync the offline source after live-side field edits.
 - `Anybus Communicator configuration *.conf` — exported gateway config;
   confirms the "GROSS FILTER" transaction/telegram layout is unchanged.
-- `HMI DB 10` — the HMI comms DB (DB10), version 0.3, owned by FC160,
+- `HMI DB 10` — the HMI comms DB (DB10), version 0.4, owned by FC160,
   not this project's source of truth. Referenced here because FC155's
   HMI bridge (above) reads/writes several of its fields by symbol name.
+  v0.4 replaced the 3 leak-detection fields (previously an unconfirmed
+  guess) with Michou's real live export — see "HMI bridge" above.
 - `DB60_OUTPUTS_DB.awl` — version 0.5. `"OUTPUTS DB"`, the real shared
   output DB (DB60) — GRN_LED_Pnl/RED_LED_Pnl/WHT_SWL_1_Pnl_Pump_Test/
   WHT_SWL_2_Pnl_Calib/WHT_SWL_3_Pnl_Alrm_Ack (now driven by FC158, see
@@ -668,26 +713,29 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   network. Renamed to match FB556's symbol, then renumbered DB108 ->
   DB556 to match FB556's own number too, same reasoning as DB555 above.
   once from FC158's "Timers" network.
-- `OB100_COMPLETE_RESTART.awl` — version 0.2. Forces this project's own
+- `OB100_COMPLETE_RESTART.awl` — version 0.3. Forces this project's own
   state (ReCalib_Step, latched alarms, HMI trigger pulses, the live
   weight reading, Panel LED command bits, and - v0.2 - the power-up
   stabilization/calibration-interlock bits) back to a safe idle default
   on every PLC restart - DB "actual values" otherwise survive a power
   cycle battery/cap-backed, so without this a reboot mid-recalibration
   would resume as if nothing happened while the relays are actually
-  de-energized. Does **not** touch operator setpoints. **Confirmed
-  (2026-10-06): OB100 already exists on the live PLC** - this file's
-  networks need to be pasted into the end of that existing block, never
-  downloaded as a replacement.
+  de-energized. Does **not** touch operator setpoints. v0.3 renamed its
+  `Alarms_Acknowledge` reset to match DB105's own rename and added a
+  reset for `Alarm_PossibleLeak` (missed when that alarm was first
+  added in DB105 v0.20). **Confirmed (2026-10-06): OB100 already exists
+  on the live PLC** - this file's networks need to be pasted into the
+  end of that existing block, never downloaded as a replacement.
 
 ## Still open
 
-- **Leak detection (v0.36) thresholds/durations are all placeholders** -
-  `FillStallMinRise_SP` (1kg), the 60s stall timeout, the 5-minute fill
-  timeout, `MaxDrainDrop_SP` (5kg), and the 30s idle-check window. None
-  of these are based on real process data - confirm/tune against the
-  actual fill rate and normal glue-consumption rate. See "Leak
-  detection" above.
+- **Leak detection timeouts are still placeholders** - the 60s stall
+  timeout and the two window clamps (10s/30min) in "Timers" are not
+  based on real process data, only the rate setpoints themselves
+  (`Fill_Rise_Min_SP`/`Drain_Drop_Max_SP`, now real HMI-configured
+  values) and `Normal_Fill_Time_SP` (real default 300 min) are. Confirm
+  the 60s stall-check window and the dynamic-window clamps are sane
+  against the actual fill rate. See "Leak detection" above.
 - **"Interrupt machine feed" — confirmed deferred (Michou, 2026-10-06):**
   for now, `Alarm_PossibleLeak` only blocks the fill pump and lights the
   RED lamp, same as the other three alarms. No cross-subsystem
@@ -700,7 +748,7 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   block, not downloaded as a replacement (would silently delete whatever
   else it resets for other 410 subsystems). If it doesn't exist yet,
   this file can be used as-is.
-- `Reset_Alarms` is now wired to `WHT_SW_3_Alarm_Reset` (v0.31, my own
+- `Alarms_Acknowledge` is now wired to `WHT_SW_3_Alarm_Reset` (v0.31, my own
   inference, not confirmed by Michou — see above).
 - FC158's white-lamp scan (now driven by FB556's clock, superseding
   FB555's `LAMP_IN`/`LAMP_OUT`/`LampScanClockMem`/`LampScanStep`) is
@@ -715,10 +763,11 @@ FC155/FB555, armed by two bits OB100 resets every restart:
   project, same unresolved caution the classical timer numbers (T50-T56,
   now retired) never got fully closed out on either. FC157->FC158 (see
   "Panel LED drive" above) already proved this caution was warranted.
-- `Hysteresis`, `SpareReal2`, `Spare_INT`, `Scale_Powered_On`,
-  `Actual_Transfered_Weight` (the DB105 copy) and `Spare_11..Spare_15`
+- `Scale_Powered_On` and `Actual_Transfered_Weight` (the DB105 copy)
   exist in DB105 but aren't wired to anything in FC155 yet — no
-  confirmed intended behavior for any of them.
+  confirmed intended behavior for either. (`Hysteresis`/`SpareReal2`/
+  `Spare_INT`/`Spare_11..Spare_15` were removed in DB105 v0.21, confirmed
+  dead/unused.)
 - The touch panel's own screen project needs its tags re-pointed to
   match `"HMI DB"` v0.3's restructured offsets — outside this repo, can't
   be done from here.

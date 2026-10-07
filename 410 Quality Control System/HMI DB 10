@@ -32,32 +32,54 @@ TITLE =   HMI DB10
 //   - This struct no longer matches v0.2's offsets at all; re-verify
 //     against the online Address column before assuming any specific
 //     byte position.
-VERSION : 0.3
+//
+// v0.4 - replaced wholesale with Michou's real live DB10 export
+//   (2026-10-07, "This is evolutive!") - v0.3's three leak-detection
+//   fields (added for FC155's v0.38 HMI-sync network to even compile)
+//   were an unconfirmed guess; this is his actual struct, now ground
+//   truth. Notable differences from the guess:
+//   - Fill_Rise_Min_SP (default 1500) and Drain_Drop_Max_SP (default
+//     120) are GRAMS/MIN, not kg - the guess assumed kg. FC155's
+//     "Timers" network now converts these properly (floored kg
+//     threshold for the stall check, a dynamic check window for the
+//     leak check) - see that file's own v0.39 changelog, this was a
+//     real bug caught by seeing his real numbers.
+//   - Normal_Fill_Time_SP (minutes) default is 300 (5h), not 0 - the
+//     guess assumed "0 = disabled until configured"; his real system
+//     already has it configured. FC155's 0-guard remains in place as a
+//     defensive fallback, not the actual operating default.
+//   - Spare_WORD1/2/3 (three) collapsed to one Spare_WORD; Spare_Bool_
+//     128 doesn't exist (127 is the last spare bool); gained
+//     Alarm_Acknowledge, Alarm_ON, and PLC_Time (DATE_AND_TIME) - none
+//     of these three are referenced by this project's own files
+//     (FC155/OB100) - presumably owned by FC160/other 410 subsystems,
+//     tracked here only because this file mirrors the whole live DB10.
+VERSION : 0.4
 
   STRUCT
    Actual_Glue_Weight : INT ;	//Actual Glue Weight [Kg]
-   Fill_Start_Weight_SP : INT ;	//Pump Start Glue Weight [Kg] - HMI Setpoint Input - synced to DB105.Fill_Start_SP by FC155
-   Fill_Stop_Weight_SP : INT ;	//Pump Stop Glue  Weight [Kg] - HMI Setpoint Input - synced to DB105.Fill_Stop_SP by FC155
-   AlarmLimit_Overfill_SP : INT ;	//Over Filled Weight [Kg] - HMI Setpoint Input - synced to DB105.AlarmLimit_Overfill_SP by FC155
-   AlarmLimit_Underfill_SP : INT ;	//Under Filled Weight [Kg] - HMI Setpoint Input - synced to DB105.AlarmLimit_Underfill_SP by FC155
+   Fill_Start_Weight_SP : INT  := 40;	//Pump Start Glue Weight [Kg] - HMI Setpoint Input - synced to DB105.Fill_Start_SP by FC155
+   Fill_Stop_Weight_SP : INT  := 80;	//Pump Stop Glue  Weight [Kg] - HMI Setpoint Input - synced to DB105.Fill_Stop_SP by FC155
+   AlarmLimit_Overfill_SP : INT  := 100;	//Over Filled Weight [Kg] - HMI Setpoint Input - synced to DB105.AlarmLimit_Overfill_SP by FC155
+   AlarmLimit_Underfill_SP : INT  := 35;	//Under Filled Weight [Kg] - HMI Setpoint Input - synced to DB105.AlarmLimit_Underfill_SP by FC155
    Actual_Transfered_Weight : INT ;	//Actual Glue Transfered Weight [Kg] since the pump last started - GrossWeight_Actual minus GrossWeight_Actual_Mem, written by FC155
    Bottomer_Velocity : INT ;	//Actual Bottomer Velocity [Tube/min] - mirrors "RUN_DATA_DB".Web_Velocity_Filtered (410 seam-AGC subsystem), written by FC155
-   Hot_Water_OnTime_SP : INT ;	//Hot Water OnTime [s] - HMI Setpoint Input
-   Hot_Water_OffTime_SP : INT ;	//Hot Water OffTime [s] - HMI Setpoint Input
-   Spare_INT : INT ;
-   Spare_WORD1 : WORD ;	//Spare
-   Spare_WORD2 : WORD ;	//Spare
+   Hot_Water_OnTime_SP : INT  := 1;	//Hot Water OnTime [s] - HMI Setpoint Input
+   Hot_Water_OffTime_SP : INT  := 29;	//Hot Water OffTime [s] - HMI Setpoint Input
+   Fill_Rise_Min_SP : INT  := 1500;	//Min Normal Fill Rise [Gram/Min] - HMI Setpoint Input - synced to DB105.Fill_Rise_Min_SP by FC155, converted to a kg threshold internally (see FC155 "Timers" v0.39)
+   Drain_Drop_Max_SP : INT  := 120;	//Max Normal Feed Rate [Gram/Min] - HMI Setpoint Input - synced to DB105.Drain_Drop_Max_SP by FC155, converted to a dynamic check window internally (see FC155 "Timers" v0.39)
+   Normal_Fill_Time_SP : INT  := 300;	//Over Normal Fill Time [Min] - HMI Setpoint Input - synced to DB105.Normal_Fill_Time_SP by FC155 - 0 = disabled (defensive fallback), see FC155 "Fill timeout"
    Screen_Number_Read : WORD ;	//Actual Screen Displayed - from HMI
    Screen_Number_Cmd : WORD ;	//Screen Change - Command from PLC
-   Spare_WORD3 : WORD ;	//Spare
+   Spare_WORD : WORD ;	//Spare
    Glue_Fill_Pump_ON : BOOL ;	//Glue Fill Pump ON - real pump output, written by FC155 (automatic Pump_ON OR Glue_Fill_Pump_Test)
    Rotaliner_Enabled : BOOL ;	//Rotaliner Enabled
    Bottomer_ON : BOOL ;	//Bottomer Running
    Bottomer_Over_50 : BOOL ;	//Bottomer Running Over 50 [Tube/min]
    Glue_Select_OK : BOOL ;	//Glue Selection OK !
-   Hot_Water_ON : BOOL ;
-   Spare1 : BOOL ;
-   Spare2 : BOOL ;
+   Hot_Water_ON : BOOL ;	//Hot Water ON
+   Alarm_Acknowledge : BOOL ;	//Alarm Acknowledge - not referenced by this project's own files (FC155/OB100), presumably owned by FC160/another 410 subsystem
+   Alarm_ON : BOOL ;	//Alarm is ON ! - not referenced by this project's own files (FC155/OB100), presumably owned by FC160/another 410 subsystem
    Screen_Cmd_Trigger : BOOL ;	//Screen Change Trigger - Command from PLC
    Glue_Fill_Pump_Test : BOOL ;	//Glue Fill Pump Test - manual override, forces Glue_Fill_Pump_ON on regardless of automatic Pump_ON, read by FC155
    Spare_Bool_122 : BOOL ;
@@ -66,32 +88,32 @@ VERSION : 0.3
    Spare_Bool_125 : BOOL ;
    Spare_Bool_126 : BOOL ;
    Spare_Bool_127 : BOOL ;
-   Spare_Bool_128 : BOOL ;
+   PLC_Time : DATE_AND_TIME ;	//not referenced by this project's own files (FC155/OB100), presumably owned by another 410 subsystem
   END_STRUCT ;
 BEGIN
    Actual_Glue_Weight := 0;
-   Fill_Start_Weight_SP := 0;
-   Fill_Stop_Weight_SP := 0;
-   AlarmLimit_Overfill_SP := 0;
-   AlarmLimit_Underfill_SP := 0;
+   Fill_Start_Weight_SP := 40;
+   Fill_Stop_Weight_SP := 80;
+   AlarmLimit_Overfill_SP := 100;
+   AlarmLimit_Underfill_SP := 35;
    Actual_Transfered_Weight := 0;
    Bottomer_Velocity := 0;
-   Hot_Water_OnTime_SP := 0;
-   Hot_Water_OffTime_SP := 0;
-   Spare_INT := 0;
-   Spare_WORD1 := W#16#0;
-   Spare_WORD2 := W#16#0;
+   Hot_Water_OnTime_SP := 1;
+   Hot_Water_OffTime_SP := 29;
+   Fill_Rise_Min_SP := 1500;
+   Drain_Drop_Max_SP := 120;
+   Normal_Fill_Time_SP := 300;
    Screen_Number_Read := W#16#0;
    Screen_Number_Cmd := W#16#0;
-   Spare_WORD3 := W#16#0;
+   Spare_WORD := W#16#0;
    Glue_Fill_Pump_ON := FALSE;
    Rotaliner_Enabled := FALSE;
    Bottomer_ON := FALSE;
    Bottomer_Over_50 := FALSE;
    Glue_Select_OK := FALSE;
    Hot_Water_ON := FALSE;
-   Spare1 := FALSE;
-   Spare2 := FALSE;
+   Alarm_Acknowledge := FALSE;
+   Alarm_ON := FALSE;
    Screen_Cmd_Trigger := FALSE;
    Glue_Fill_Pump_Test := FALSE;
    Spare_Bool_122 := FALSE;
@@ -100,5 +122,5 @@ BEGIN
    Spare_Bool_125 := FALSE;
    Spare_Bool_126 := FALSE;
    Spare_Bool_127 := FALSE;
-   Spare_Bool_128 := FALSE;
+   PLC_Time := DT#90-1-1-0:0:0.000;
 END_DATA_BLOCK

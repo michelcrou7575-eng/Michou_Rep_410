@@ -31,7 +31,14 @@ TITLE =Force glue-scale / Panel LED state to safe idle on every PLC restart
 //   network) and Scale_Calibrated (the new pump interlock - see FC155's
 //   "Power-up/recalibration interlock" network). Added both resets to
 //   the "Glue scale" network below.
-VERSION : 0.2
+//
+// v0.3 - reconciled against Michou's own live DB105 refactor
+//   (2026-10-07): Reset_Alarms renamed Alarms_Acknowledge - updated the
+//   reset below to match. Also added a reset for the new
+//   Alarm_PossibleLeak latch (FC155/DB105 v0.20) - missed when that
+//   alarm was first added, would have left a possible-leak alarm from
+//   before a reboot still latched after it.
+VERSION : 0.3
 
 
 VAR_TEMP
@@ -56,7 +63,8 @@ TITLE =Glue scale - clear latched alarms, HMI trigger pulses, and mid-sequence s
       R     "GLUE SCALE CONTROL DB".ParseError;
       R     "GLUE SCALE CONTROL DB".Pump_ON_Prev;
       R     "GLUE SCALE CONTROL DB".Scale_Powered_On;
-      R     "GLUE SCALE CONTROL DB".Reset_Alarms;
+      R     "GLUE SCALE CONTROL DB".Alarms_Acknowledge;
+      R     "GLUE SCALE CONTROL DB".Alarm_PossibleLeak;
       R     "GLUE SCALE CONTROL DB".Scale_PowerOFF_Pulse;
       R     "GLUE SCALE CONTROL DB".Scale_ReCalib_Req;
       R     "GLUE SCALE CONTROL DB".Scale_PowerON_Pulse;

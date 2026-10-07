@@ -1,75 +1,172 @@
 DATA_BLOCK "GLUE SCALE CONTROL DB"
 TITLE =Glue Scale Weight Control and Alarms  DB105
+// History (full blow-by-blow in git log, this comment block was
+// trimmed 2026-10-02 after FC155's own header grew past STEP7's
+// title/comment size limit and failed to compile - "Byte offset/number
+// too big". This DB's header was getting close too. Keep future
+// entries short.):
+//
+// v0.3-v0.7: synced field names/offsets/types against repeated live
+//   online edits (Setpoint_Fill->Fill_Start_SP/Fill_Stop_SP,
+//   NegativeUnderScore_Value sentinel added, Reset_Alarms added,
+//   REAL->INT conversion, SpareReal1-3 appeared online).
+// v0.8-v0.9: reconciled against Michou's parallel online FC155 rebuild
+//   (AlarmLimit_*_SP naming, GrossWeight_Actual_Mem snapshot,
+//   Valve_Open->Pump_ON rename); added LampScanClockMem/LampScanStep
+//   for the white-lamp scan pattern; Overfill/Underfill now interlock
+//   Pump_ON.
+// v0.10-v0.12: added PlatformMinWeight_SP (empty-platform ~30kg sanity
+//   check, same alarm bit as the scale-fault sentinel); added then
+//   confirmed NegativeUnderScore_Value is INT -20663 (not DINT
+//   5222222 as first assumed - Michou: "no more DINT/5222222!").
+// v0.13-v0.14: ReCalib_Step now powers the scale off first (0-5, not
+//   0-4); Michou refactored this struct directly online - removed
+//   PowerOff_Step/ReCalib_ReqMem/PowerOff_ReqMem, replaced the
+//   standalone power-off trigger with Scale_PowerOFF_Pulse, added
+//   Scale_PowerON_Pulse (new standalone power-on trigger),
+//   PlatformMinWeight_SP moved + gained an inline default, SpareReal1
+//   dropped (SpareReal2 remains) + NEW Spare_INT, GrossWeight_Actual's
+//   initial value is -20663 (deliberate test-state default).
+// v0.16 - comment-only: ReCalib_Step's field comment still described
+//   FC156's original (and already-superseded) 4-step sequence. Updated
+//   to match FC155 v0.28's corrected "Process ON" sequence (K1+K2
+//   simultaneous, 5s K2-alone power-off, 3s dwell wait) - see that
+//   file's own changelog for the full reasoning. No struct/field
+//   changes.
+// v0.17 - comment-only: FC155 v0.29 no longer writes LampScanStep/
+//   LampScanClockMem (white-lamp driving moved to the new FC157 "PANEL
+//   LED DRIVE" / "PANEL LED CMD DB" - see those files). Fields left
+//   declared (not deleted - may still be HMI-wired) but marked
+//   superseded/dead below.
+// v0.18 - per Michou (2026-10-06): "Need a 30 sec delay before
+//   restarting after power has resumed ... Need to restart KiloTech
+//   Scale too and make sure it is calibrated before operating the
+//   pump!" Added PowerUp_Settled (internal one-shot latch FC155 uses to
+//   feed FB555's new 30s startup-stabilization timer - reset FALSE by
+//   OB100 every restart) and Scale_Calibrated (TRUE once a
+//   recalibration has completed since the last restart - reset FALSE
+//   by OB100, SET by FC155's RCS5 - interlocks the pump). See FC155
+//   v0.30 and OB100_COMPLETE_RESTART.awl's own changelog.
+// v0.19 - comment-only: two field comments below still pointed at
+//   FC157/DB108, both superseded (FC157 -> FC158, DB108 -> DB556 -
+//   see those files' own changelogs). Updated to match.
+// v0.20 - per Michou (2026-10-06): "Underfill Alarm should go off even
+//   when pump is running! Could be a leak! Should stop the Pump like
+//   overfilled! ... there should be a timing alarm too: If Fill take
+//   too long or if the glue Barrel is emptying too fast ... could be a
+//   leak also." Added fields for FC155's 3 new leak-detection networks
+//   (see that file's own changelog for the full logic): FillStall_Ref/
+//   FillStallMinRise_SP (stalled-fill detection, feeds Alarm_Underfill)
+//   and DrainCheck_Ref/MaxDrainDrop_SP (idle rapid-drain detection, new
+//   Alarm_PossibleLeak).
+// v0.21 - reconciled against Michou's own live refactor (2026-10-07,
+//   "Refactor GLUE_SCALE_CONTROL_DB with new parameters"):
+//   - Renamed to match his convention: FillStall_Ref -> Fill_Rise_Ref,
+//     FillStallMinRise_SP -> Fill_Rise_Min_SP, MaxDrainDrop_SP ->
+//     Drain_Drop_Max_SP, Reset_Alarms -> Alarms_Acknowledge. All
+//     references updated in FC155/OB100.
+//   - NEW Normal_Fill_Time_SP (INT, minutes) - an HMI-adjustable
+//     replacement for FC155's hardcoded T#5M "Fill timeout" placeholder
+//     (see that file's own changelog for the INT-minutes -> TIME-ms
+//     conversion and the 0-means-disabled guard this needed. Michou's
+//     own default is 0 - kept as-is, matches the guard's "disabled
+//     until configured" convention, a safer fail-state than guessing a
+//     number).
+//   - LampScanStep and ReCalib_Step changed INT -> BYTE. Values used are
+//     always 0-5 (small positive), so FC155's existing ==I/<>I/>=I/<=I
+//     comparisons against these fields should still work unchanged (L
+//     zero-extends a BYTE the same way a small positive INT would
+//     occupy the accumulator - same pattern this file already relies on
+//     for "ABC3000A_DB".Byte_6/7/9/10) - not independently compile-
+//     verified, flag if this turns out wrong.
+//   - Removed: Hysteresis, Spare_INT, SpareReal2 (all three confirmed
+//     dead/unused), Spare_11-15 (collapsed to a single Spare_1).
+//   - Field order below matches his struct exactly (symbol-name
+//     addressing throughout FC155 means reordering is safe, done here
+//     purely for accurate tracking).
+// v0.22 - reconciled against Michou's next live update (2026-10-07,
+//   "Implement synchronization of HMI setpoints to scale") - no DB105
+//   struct/field changes, this entry documents that FC155's "Sync HMI
+//   setpoints" network now also syncs Fill_Rise_Min_SP/Drain_Drop_Max_
+//   SP/Normal_Fill_Time_SP from "HMI DB" every scan (see FC155's own
+//   changelog for a bug caught and fixed in that update).
+// v0.23 - per Michou's real live "HMI DB"/DB10 export (2026-10-07,
+//   "This is evolutive!"): Fill_Rise_Min_SP and Drain_Drop_Max_SP are
+//   actually GRAMS/MIN (HMI defaults 1500/120), not kg as first assumed
+//   - these two fields just mirror the HMI's raw value every scan
+//   (unconverted), FC155's "Timers" network does the real kg/window
+//   conversion internally (see that file's v0.39 changelog). Comments
+//   and defaults below updated to match; also updated Normal_Fill_
+//   Time_SP's default to his real configured value (300 min), not 0 -
+//   the 0-disabled guard in FC155 remains as a defensive fallback, not
+//   the actual operating default.
+VERSION : 0.23
 
-VERSION : 1.2
-
-
-  STRUCT 	
-   GrossWeight_Actual : INT ;	//Parsed live weight from KWS CY300 scale (kg) - whole kg, scale's decimal digit 
-   GrossWeight_Actual_Mem : INT ;	//Snapshot of GrossWeight_Actual taken on the scan the pump Started
-   Fill_Start_SP : INT ;	//Operator-entered fill-start weight (kg) - pump turns on below this - HMI writab
-   Fill_Stop_SP : INT ;	//Operator-entered fill-stop weight (kg) - pump turns off at/above this - HMI wri
-   AlarmLimit_Overfill_SP : INT ;	//Operator-entered max allowed weight (kg) - HMI writable - latching, interlocks 
-   AlarmLimit_Underfill_SP : INT ;	//Operator-entered min allowed weight (kg) - HMI writable - latching, interlocks 
-   Actual_Transfered_Weight : INT ;	//Actual Glue Transfered Weight [Kg] since last started - GrossWeight_Ac
-   NegativeUnderScore_Value : INT ;	//Fixed sentinel value the KWS CY300 sends when its reading is negative (scale fa
+  STRUCT
+   GrossWeight_Actual : INT ;	//Parsed live weight from KWS CY300 scale (kg) - whole kg, scale's decimal digit discarded
+   GrossWeight_Actual_Mem : INT ;	//Snapshot of GrossWeight_Actual taken on the scan the pump started
+   Fill_Start_SP : INT ;	//Operator-entered fill-start weight (kg) - pump turns on below this - HMI writable
+   Fill_Stop_SP : INT ;	//Operator-entered fill-stop weight (kg) - pump turns off at/above this - HMI writable
+   AlarmLimit_Overfill_SP : INT ;	//Operator-entered max allowed weight (kg) - HMI writable - latching, interlocks the pump
+   AlarmLimit_Underfill_SP : INT ;	//Operator-entered min allowed weight (kg) - HMI writable - latching, interlocks the pump
+   Actual_Transfered_Weight : INT ;	//Actual Glue Transfered Weight [Kg] since last started - GrossWeight_Actual - GrossWeight_Actual_Mem
+   NegativeUnderScore_Value : INT ;	//Fixed sentinel value the KWS CY300 sends when its reading is negative (scale fault)
    PlatformMinWeight_SP : INT  := 30;	//Scale Platform Min Weight SP 30 [Kg]
-   Fill_Rise_Min_SP : INT  := 1;	//Operator-entered (kg) - min weight rise counted as fill progress per stall chec
-   Drain_Drop_Max_SP : INT  := 5;	//Operator-entered (kg) - max weight drop allowed per idle check window before fl
-   Normal_Fill_Time_SP : INT ;	//Over Normal Fill Time [Min]
-   Fill_Rise_Ref : INT ;	//Internal - weight reference for fill-stall detection, reseeded at every Pump_ON
-   DrainCheck_Ref : INT ;	//Internal - weight reference for idle rapid-drain detection, rebaselined every c
-   LampScanStep : BYTE ;	//DEAD as of FC155 v0.29 - superseded by "PANEL LED CMD DB".WHT_ScanStep, see FC1
-   ReCalib_Step : BYTE ;	//FC155 sequence step - 0 idle, 1 K2-alone 5s power-off, 2 3s dwell wait, 3 Proce
-   Pump_ON : BOOL ;	//Output: TRUE = glue fill pump commanded on, filling in progress - mirrored onto
-   Alarm_Overfill : BOOL ;	//Output: TRUE = weight exceeded overfill limit (latching) - interlocks Pump_ON o
-   Alarm_Underfill : BOOL ;	//Output: TRUE = weight below underfill limit at settle check (latching) - interl
+   Fill_Rise_Min_SP : INT  := 1500;	//Operator-entered (GRAMS/MIN, mirrors "HMI DB" raw) - min fill rise rate before "Fill stall detection" alarms - HMI writable - FC155's "Timers" converts to a floored kg/60s threshold, see that file's v0.39
+   Drain_Drop_Max_SP : INT  := 120;	//Operator-entered (GRAMS/MIN, mirrors "HMI DB" raw) - max normal idle drain rate before "Possible leak" alarms - HMI writable - FC155's "Timers" converts this into a dynamic check window, see that file's v0.39
+   Normal_Fill_Time_SP : INT  := 300;	//Operator-entered (min) - max normal fill duration before "Fill timeout" alarms - HMI writable - Michou's real configured default is 300 (5h); 0 = disabled (defensive fallback), see FC155's "Fill timeout" network
+   Fill_Rise_Ref : INT ;	//Internal - weight reference for fill-stall detection, reseeded at every Pump_ON rising edge, advanced whenever Fill_Rise_Min_SP of progress is seen - see FC155 "Fill stall detection"
+   DrainCheck_Ref : INT ;	//Internal - weight reference for idle rapid-drain detection, rebaselined every check window regardless of outcome - see FC155 "Possible leak" network
+   LampScanStep : BYTE ;	//DEAD as of FC155 v0.29 - superseded by "PANEL LED CMD DB".WHT_ScanStep, see FC158
+   ReCalib_Step : BYTE ;	//FC155 sequence step - 0 idle, 1 K2-alone 5s power-off, 2 3s dwell wait, 3 Process ON (K1+K2 start together), 4 waiting for K1's 8s hold, 5 K1 off/done
+   Pump_ON : BOOL ;	//Output: TRUE = glue fill pump commanded on, filling in progress - mirrored onto the real actuator bit
+   Alarm_Overfill : BOOL ;	//Output: TRUE = weight exceeded overfill limit (latching) - interlocks Pump_ON off
+   Alarm_Underfill : BOOL ;	//Output: TRUE = weight below underfill limit at settle check, OR a fill stalled/timed out (latching) - interlocks Pump_ON off
    ParseError : BOOL ;	//Output: TRUE = ASCII parse failed this scan (bad/garbled scale data)
    Pump_ON_Prev : BOOL ;	//Internal: previous scan Pump_ON state, for edge detection (was Valve_Open_Prev)
    Scale_Powered_On : BOOL ;	//Live Data Coming In - Status
-   Alarm_ScaleFault : BOOL ;	//Output: TRUE = the scale's raw parsed integer matched NegativeUnderScore_Value 
-   Alarms_Acknowledge : BOOL ;	//Input: HMI-driven, hold/pulse TRUE to clear Alarm_Overfill, Alarm_Underfill and
+   Alarm_ScaleFault : BOOL ;	//Output: TRUE = the scale's raw parsed integer matched NegativeUnderScore_Value (latching)
+   Alarms_Acknowledge : BOOL ;	//Input: HMI-driven, hold/pulse TRUE to clear Alarm_Overfill, Alarm_Underfill, Alarm_ScaleFault and Alarm_PossibleLeak (was Reset_Alarms)
    LampScanClockMem : BOOL ;	//DEAD as of FC155 v0.29 - superseded by FB556/DB556's own clock, see FC158
    Scale_PowerOFF_Pulse : BOOL ;	//Scale Power-Off Process (Power Hold 3s)
    Scale_ReCalib_Req : BOOL ;	//Start the Power-Off calibration sequence (Power Hold 3s)
-   Scale_PowerON_Pulse : BOOL ;	//Input: HMI/manual, pulse or hold TRUE to run "Process ON" standalone (K1+K2 tog
-   PowerUp_Settled : BOOL ;	//Internal - one-shot latch, FALSE for exactly one scan after OB100 resets it, th
-   Scale_Calibrated : BOOL ;	//Output: TRUE once the scale has completed a recalibration since the last restar
-   Alarm_PossibleLeak : BOOL ;	//Output: TRUE = weight dropped faster than MaxDrainDrop_SP while idle (Pump_ON f
-   Spare_1 : BOOL ;	
-  END_STRUCT ;	
+   Scale_PowerON_Pulse : BOOL ;	//Input: HMI/manual, pulse or hold TRUE to run "Process ON" standalone (K1+K2 together, see ReCalib_Step/FC155) - enters the same ReCalib_Step sequence directly at step 3, auto-clears when done
+   PowerUp_Settled : BOOL ;	//Internal - one-shot latch, FALSE for exactly one scan after OB100 resets it, then TRUE forever until the next restart - feeds FB555's STARTUP_IN so its 30s timer starts fresh every power-up
+   Scale_Calibrated : BOOL ;	//Output: TRUE once the scale has completed a recalibration since the last restart - reset FALSE by OB100, SET by FC155 on ReCalib_Step completion (RCS5) - interlocks the pump
+   Alarm_PossibleLeak : BOOL ;	//Output: TRUE = weight dropped faster than Drain_Drop_Max_SP while idle (Pump_ON false) - latching, interlocks Pump_ON off, cleared by Alarms_Acknowledge
+   Spare_1 : BOOL ;
+  END_STRUCT ;
 BEGIN
-   GrossWeight_Actual := -20663; 
-   GrossWeight_Actual_Mem := 0; 
-   Fill_Start_SP := 50; 
-   Fill_Stop_SP := 70; 
-   AlarmLimit_Overfill_SP := 80; 
-   AlarmLimit_Underfill_SP := 20; 
-   Actual_Transfered_Weight := 0; 
-   NegativeUnderScore_Value := -20663; 
-   PlatformMinWeight_SP := 30; 
-   Fill_Rise_Min_SP := 1; 
-   Drain_Drop_Max_SP := 5; 
-   Normal_Fill_Time_SP := 0; 
-   Fill_Rise_Ref := 0; 
-   DrainCheck_Ref := 0; 
-   LampScanStep := B#16#0; 
-   ReCalib_Step := B#16#0; 
-   Pump_ON := FALSE; 
-   Alarm_Overfill := FALSE; 
-   Alarm_Underfill := FALSE; 
-   ParseError := FALSE; 
-   Pump_ON_Prev := FALSE; 
-   Scale_Powered_On := FALSE; 
-   Alarm_ScaleFault := FALSE; 
-   Alarms_Acknowledge := FALSE; 
-   LampScanClockMem := FALSE; 
-   Scale_PowerOFF_Pulse := FALSE; 
-   Scale_ReCalib_Req := FALSE; 
-   Scale_PowerON_Pulse := FALSE; 
-   PowerUp_Settled := FALSE; 
-   Scale_Calibrated := FALSE; 
-   Alarm_PossibleLeak := FALSE; 
-   Spare_1 := FALSE; 
+   GrossWeight_Actual := -20663;
+   GrossWeight_Actual_Mem := 0;
+   Fill_Start_SP := 50;
+   Fill_Stop_SP := 70;
+   AlarmLimit_Overfill_SP := 80;
+   AlarmLimit_Underfill_SP := 20;
+   Actual_Transfered_Weight := 0;
+   NegativeUnderScore_Value := -20663;
+   PlatformMinWeight_SP := 30;
+   Fill_Rise_Min_SP := 1500;
+   Drain_Drop_Max_SP := 120;
+   Normal_Fill_Time_SP := 300;
+   Fill_Rise_Ref := 0;
+   DrainCheck_Ref := 0;
+   LampScanStep := B#16#0;
+   ReCalib_Step := B#16#0;
+   Pump_ON := FALSE;
+   Alarm_Overfill := FALSE;
+   Alarm_Underfill := FALSE;
+   ParseError := FALSE;
+   Pump_ON_Prev := FALSE;
+   Scale_Powered_On := FALSE;
+   Alarm_ScaleFault := FALSE;
+   Alarms_Acknowledge := FALSE;
+   LampScanClockMem := FALSE;
+   Scale_PowerOFF_Pulse := FALSE;
+   Scale_ReCalib_Req := FALSE;
+   Scale_PowerON_Pulse := FALSE;
+   PowerUp_Settled := FALSE;
+   Scale_Calibrated := FALSE;
+   Alarm_PossibleLeak := FALSE;
+   Spare_1 := FALSE;
 END_DATA_BLOCK
-

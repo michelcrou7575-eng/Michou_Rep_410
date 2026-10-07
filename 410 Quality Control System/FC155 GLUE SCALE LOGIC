@@ -210,21 +210,21 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Pump Control, Alarms, KWS CY30   FC155
 //   emptying too fast ... could be a leak also. We need to forsee any/
 //   every scenario that could cause a disaster (Glue spill!!!)." Three
 //   new networks, right after "Pump control":
-//   - "Fill stall detection": no measurable progress (FillStallMinRise_
-//     SP, 1kg default) for 60s (placeholder) while Pump_ON - sets
+//   - "Fill stall detection": no measurable progress (Fill_Rise_Min_SP,
+//     1kg default) for 60s (placeholder) while Pump_ON - sets
 //     Alarm_Underfill (reused, not a new identity, per Michou's wording
 //     - already interlocks Pump_ON off via the existing Overfill/
-//     Underfill interlock). FillStall_Ref reseeds at every Pump_ON
+//     Underfill interlock). Fill_Rise_Ref reseeds at every Pump_ON
 //     rising edge (same place GrossWeight_Actual_Mem already snapshots).
 //   - "Fill timeout": Pump_ON continuously for 5 minutes (placeholder)
 //     regardless of progress - complements the stall check above, which
 //     only catches a complete stall, not an abnormally slow fill.
-//   - "Possible leak": weight drops more than MaxDrainDrop_SP (5kg
+//   - "Possible leak": weight drops more than Drain_Drop_Max_SP (5kg
 //     default placeholder) within a 30s (placeholder) window while
 //     idle (Pump_ON false) - genuinely different from the two above
 //     (runs during normal operation, not a fill), so it's a NEW alarm,
 //     Alarm_PossibleLeak, not reused Alarm_Underfill. Added to the
-//     Overfill/Underfill interlock, Reset_Alarms, and Alarm lamp
+//     Overfill/Underfill interlock, Alarms_Acknowledge, and Alarm lamp
 //     command networks alongside the existing three alarms.
 //   ALL thresholds/durations above are PLACEHOLDERS - this repo has no
 //   way to know the real fill rate or normal idle consumption rate,
@@ -236,8 +236,75 @@ TITLE =Glue Scale: DP Read, ASCII Parse, Pump Control, Alarms, KWS CY30   FC155
 //   process consuming the glue is a decision only Michou can make (no
 //   verified output/mechanism for that exists in this repo's scope) -
 //   flagged in chat, Alarm_PossibleLeak only drives the RED lamp and
-//   blocks the fill pump for now.
-VERSION : 0.36
+//   blocks the fill pump for now. CONFIRMED (2026-10-06): detect-and-
+//   alarm only, for now - no cross-subsystem interlock wanted yet.
+//
+// v0.37 - reconciled against Michou's own live refactor of DB105
+//   (2026-10-07, "Refactor GLUE_SCALE_CONTROL_DB with new parameters"):
+//   renamed throughout to match his convention: FillStall_Ref ->
+//   Fill_Rise_Ref, FillStallMinRise_SP -> Fill_Rise_Min_SP,
+//   MaxDrainDrop_SP -> Drain_Drop_Max_SP, Reset_Alarms -> Alarms_
+//   Acknowledge. DB105's ReCalib_Step/LampScanStep changed INT -> BYTE
+//   - no FC155 code changes needed (see DB105's own changelog for why).
+//
+// v0.38 - reconciled against Michou's next live update (2026-10-07,
+//   "Implement synchronization of HMI setpoints to scale"), which
+//   extended "Sync HMI setpoints" with the 3 new leak-detection
+//   setpoints. Caught and fixed two issues in his pasted version: a
+//   duplicated NETWORK/TITLE header (left over from editing), and the
+//   last pair's destination - it targeted Fill_Rise_Ref instead of
+//   Normal_Fill_Time_SP (copy-paste leftover) - would have clobbered
+//   the fill-stall reference with the fill-timeout minutes value every
+//   single scan, AND left Normal_Fill_Time_SP never actually synced
+//   from the HMI. Also replaced "Fill timeout"'s hardcoded T#5M
+//   placeholder with a value computed from Normal_Fill_Time_SP
+//   (converted INT->TIME via ITD then *L#60000 - TIME's internal
+//   representation IS a DINT ms count, so storing the computed DINT
+//   directly into a TIME temp gives the equivalent TIME value). Added
+//   a guard: FILLTIME_IN now requires Normal_Fill_Time_SP > 0, since
+//   Michou's own default for the new field is 0 and a PT=0 TON fires
+//   essentially instantly - without the guard, every single fill would
+//   instantly alarm. 0 now correctly means "feature disabled until
+//   configured," a safer fail-state than guessing a number for him.
+//   "HMI DB" needed 3 new fields (Fill_Rise_Min_SP/Drain_Drop_Max_SP/
+//   Normal_Fill_Time_SP) for this to even compile - added to that
+//   file's own tracked source as a best guess, not yet confirmed
+//   against Michou's real live DB10 export - see that file's changelog.
+//
+// v0.39 - Michou provided his real live "HMI DB"/DB10 export (2026-10-07,
+//   "This is evolutive!") - revealed Fill_Rise_Min_SP/Drain_Drop_Max_SP
+//   are in GRAMS/MIN, not kg as this file assumed (Normal_Fill_Time_SP's
+//   minutes assumption was correct). GrossWeight_Actual is whole-kg
+//   resolution (scale's own decimal digit discarded before this file
+//   ever sees it) - comparing a raw gram/min rate against that directly
+//   would have been badly broken: at the real defaults (1500/120 g/min),
+//   "Fill stall detection"'s fixed 60s window gives a 1.5kg threshold
+//   (truncates to 1kg, survivable) but "Possible leak"'s fixed 30s
+//   window gives only 0.12kg (truncates to 0kg - the alarm would have
+//   fired on ordinary scale noise, constantly, for any idle period).
+//   Two different fixes, since the degeneracy was far worse for one:
+//   - "Fill stall detection": Fill_Rise_Min_SP (g/min) now converted to
+//     kg via INT division by 1000, with a floor of 1kg - a setting
+//     under 1000 g/min can no longer silently disable the check by
+//     rounding its threshold to 0. New #FILLRISE_KG temp. Window stays
+//     the existing fixed 60s (FILLSTALL_IN_TIME, unchanged).
+//   - "Possible leak": the fixed 30s window couldn't survive a floor
+//     (would distort sensitivity ~8x at the real default rate), so this
+//     one instead computes a DYNAMIC window in "Timers" - the time it
+//     would take Drain_Drop_Max_SP (g/min) to drop a fixed 1kg margin
+//     at the configured "normal" rate, clamped to [10s, 30min]. The
+//     per-scan comparison in "Possible leak" is now a fixed 1kg margin
+//     instead of the raw SP - the SP is absorbed into the window length
+//     instead. New #DRAINCHK_EN/#DRAINWIN_MS/#DRAINWIN_TIME temps;
+//     DRAINCHK_IN_TIME in the "Timers" CALL is now #DRAINWIN_TIME, not
+//     the old fixed T#30S literal. Guarded against Drain_Drop_Max_SP<=0
+//     (divide-by-zero) same as Normal_Fill_Time_SP's own 0-disabled
+//     convention.
+//   "HMI DB" rewritten wholesale to match his real export (was a
+//   best-guess before) - see that file's own v0.4 changelog. Also
+//   learned his real Normal_Fill_Time_SP default is 300 (minutes, not
+//   0) - DB105's own default updated to match, see that file's v0.23.
+VERSION : 0.39
 
 
 VAR_TEMP
@@ -265,38 +332,44 @@ VAR_TEMP
   DRAINCHK_IN : BOOL ;
   FILLSTALL_THRESH : INT ;
   PROGRESS_MADE : BOOL ;
+  FILLTIME_TIME : TIME ;
+  FILLRISE_KG : INT ;
+  DRAINCHK_EN : BOOL ;
+  DRAINWIN_MS : DINT ;
+  DRAINWIN_TIME : TIME ;
 END_VAR
 BEGIN
 NETWORK
-TITLE =Sync HMI setpoints -> scale setpoints (unconditional, every scan
+TITLE =Sync HMI setpoints -> scale setpoints (unconditional, every scan)
 // Only these fields correspond between "HMI DB" and DB105 - see v0.15/
 // v0.18 changelogs for why the other same-offset fields must NOT be
-// copied this way.
-   NETWORK
-TITLE =Sync HMI setpoints -> scale setpoints (unconditional, every scan
-// Only these fields correspond between "HMI DB" and DB105 - see v0.15/
-// v0.18 changelogs for why the other same-offset fields must NOT be
-// copied this way.
-      L     "HMI DB".Fill_Start_Weight_SP; 
-      T     "GLUE SCALE CONTROL DB".Fill_Start_SP; 
-//;
-      L     "HMI DB".Fill_Stop_Weight_SP; 
-      T     "GLUE SCALE CONTROL DB".Fill_Stop_SP; 
-//;
-      L     "HMI DB".AlarmLimit_Overfill_SP; 
-      T     "GLUE SCALE CONTROL DB".AlarmLimit_Overfill_SP; 
-//;
-      L     "HMI DB".AlarmLimit_Underfill_SP; 
-      T     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill_SP; 
-//;
-      L     "HMI DB".Fill_Rise_Min_SP; 
-      T     "GLUE SCALE CONTROL DB".Fill_Rise_Min_SP; 
-//;
-      L     "HMI DB".Drain_Drop_Max_SP; 
-      T     "GLUE SCALE CONTROL DB".Drain_Drop_Max_SP; 
-//;
-      L     "HMI DB".Normal_Fill_Time_SP; 
-      T     "GLUE SCALE CONTROL DB".Fill_Rise_Ref; 
+// copied this way. v0.37 (Michou, 2026-10-07) added the 3 leak-
+// detection setpoints - fixed one bug while integrating: the last pair
+// targeted "GLUE SCALE CONTROL DB".Fill_Rise_Ref instead of Normal_
+// Fill_Time_SP (copy-paste leftover) - would have clobbered the fill-
+// stall reference with the fill-timeout minutes value every scan, and
+// left Normal_Fill_Time_SP never synced from the HMI at all. Also
+// removed a duplicated NETWORK/TITLE header from the pasted version.
+      L     "HMI DB".Fill_Start_Weight_SP;
+      T     "GLUE SCALE CONTROL DB".Fill_Start_SP;
+
+      L     "HMI DB".Fill_Stop_Weight_SP;
+      T     "GLUE SCALE CONTROL DB".Fill_Stop_SP;
+
+      L     "HMI DB".AlarmLimit_Overfill_SP;
+      T     "GLUE SCALE CONTROL DB".AlarmLimit_Overfill_SP;
+
+      L     "HMI DB".AlarmLimit_Underfill_SP;
+      T     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill_SP;
+
+      L     "HMI DB".Fill_Rise_Min_SP;
+      T     "GLUE SCALE CONTROL DB".Fill_Rise_Min_SP;
+
+      L     "HMI DB".Drain_Drop_Max_SP;
+      T     "GLUE SCALE CONTROL DB".Drain_Drop_Max_SP;
+
+      L     "HMI DB".Normal_Fill_Time_SP;
+      T     "GLUE SCALE CONTROL DB".Normal_Fill_Time_SP;
 
 NETWORK
 TITLE =Update
@@ -366,8 +439,20 @@ TITLE =Timers - compute each IN condition, CALL FB555 "IEC_TIMERS" once
       SET   ;
       S     "GLUE SCALE CONTROL DB".PowerUp_Settled;
 
-      L     "GLUE SCALE CONTROL DB".FillStall_Ref; // threshold = reference + min-rise, see "Fill stall detection" network below
-      L     "GLUE SCALE CONTROL DB".FillStallMinRise_SP;
+      L     "GLUE SCALE CONTROL DB".Fill_Rise_Min_SP; // HMI value is grams/min (see "HMI DB" v0.4) - convert to kg over this network's fixed 60s window; floor at 1kg so a setting under 1000 g/min can't silently disable the check (threshold would otherwise round to 0)
+      L     1000;
+      /I    ;
+      T     #FILLRISE_KG;
+
+      L     #FILLRISE_KG;
+      L     1;
+      >=I   ;
+      JC    FRK1;
+      L     1;
+      T     #FILLRISE_KG;
+
+FRK1: L     "GLUE SCALE CONTROL DB".Fill_Rise_Ref; // threshold = reference + min-rise, see "Fill stall detection" network below
+      L     #FILLRISE_KG;
       +I    ;
       T     #FILLSTALL_THRESH;
 
@@ -380,10 +465,54 @@ TITLE =Timers - compute each IN condition, CALL FB555 "IEC_TIMERS" once
       AN    #PROGRESS_MADE;
       =     #FILLSTALL_IN;
 
+      L     "GLUE SCALE CONTROL DB".Normal_Fill_Time_SP; // 0 = disabled (Michou's own default) - guard so PT=0 can't fire a timeout instantly on every fill
+      L     0;
+      >I    ;
       A     "GLUE SCALE CONTROL DB".Pump_ON; // counts continuously while filling, resets the instant the pump stops - total fill duration, regardless of progress
       =     #FILLTIME_IN;
 
-      AN    "GLUE SCALE CONTROL DB".Pump_ON; // free-running periodic pulse while idle, same self-oscillating idiom as LAMP_IN
+      L     "GLUE SCALE CONTROL DB".Normal_Fill_Time_SP; // INT minutes -> TIME ms: ITD then *60000 (TIME's internal representation IS a DINT ms count, so storing the result directly into a TIME temp gives the equivalent TIME value - standard STL idiom)
+      ITD   ;
+      L     L#60000;
+      *D    ;
+      T     #FILLTIME_TIME;
+
+      L     "GLUE SCALE CONTROL DB".Drain_Drop_Max_SP; // 0 = disabled (same convention as Normal_Fill_Time_SP) - also guards the /D below against divide-by-zero
+      L     0;
+      >I    ;
+      =     #DRAINCHK_EN;
+
+      AN    #DRAINCHK_EN;
+      JC    DWG0;
+
+      L     L#60000000; // ms for Drain_Drop_Max_SP (g/min) to drop a 1kg margin at the configured normal rate - see "Possible leak" network
+      L     "GLUE SCALE CONTROL DB".Drain_Drop_Max_SP;
+      ITD   ;
+      /D    ;
+      T     #DRAINWIN_MS;
+
+      L     #DRAINWIN_MS; // clamp: never below 10s - a very high configured rate would otherwise give a window short enough for scale noise to false-trigger
+      L     L#10000;
+      >D    ;
+      JC    DWC1;
+      L     L#10000;
+      T     #DRAINWIN_MS;
+DWC1: L     #DRAINWIN_MS; // clamp: never above 30min - a very low configured rate would otherwise make this check run too rarely to be useful
+      L     L#1800000;
+      <D    ;
+      JC    DWC2;
+      L     L#1800000;
+      T     #DRAINWIN_MS;
+DWC2: JU    DWDN;
+
+DWG0: L     L#30000; // disabled: harmless default, DRAINCHK_IN is gated off below so this is never actually used to alarm
+      T     #DRAINWIN_MS;
+
+DWDN: L     #DRAINWIN_MS; // DINT ms -> TIME, same idiom as FILLTIME_TIME above
+      T     #DRAINWIN_TIME;
+
+      AN    "GLUE SCALE CONTROL DB".Pump_ON; // free-running periodic pulse while idle, same self-oscillating idiom as LAMP_IN - gated off entirely while disabled
+      A     #DRAINCHK_EN;
       AN    "IEC TIMERS DB".DRAINCHK_OUT;
       =     #DRAINCHK_IN;
 
@@ -405,9 +534,9 @@ TITLE =Timers - compute each IN condition, CALL FB555 "IEC_TIMERS" once
            FILLSTALL_IN             := #FILLSTALL_IN,
            FILLSTALL_IN_TIME        := T#60S,
            FILLTIME_IN              := #FILLTIME_IN,
-           FILLTIME_IN_TIME         := T#5M,
+           FILLTIME_IN_TIME         := #FILLTIME_TIME,
            DRAINCHK_IN              := #DRAINCHK_IN,
-           DRAINCHK_IN_TIME         := T#30S,
+           DRAINCHK_IN_TIME         := #DRAINWIN_TIME,
            STARTUP_IN               := #STARTUP_IN,
            STARTUP_IN_TIME          := T#30S);
 
@@ -596,9 +725,9 @@ CHKC: L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
 
 OPEN: FP    "FP 201.0"; // edge memory - fires once, the scan Pump_ON is newly commanded on
       JCN   TRXF;
-      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; // snapshot weight at pump-start for Actual_Transfered_Weight, also reseeds FillStall_Ref (see "Fill stall detection" below)
+      L     "GLUE SCALE CONTROL DB".GrossWeight_Actual; // snapshot weight at pump-start for Actual_Transfered_Weight, also reseeds Fill_Rise_Ref (see "Fill stall detection" below)
       T     "GLUE SCALE CONTROL DB".GrossWeight_Actual_Mem;
-      T     "GLUE SCALE CONTROL DB".FillStall_Ref;
+      T     "GLUE SCALE CONTROL DB".Fill_Rise_Ref;
 
 TRXF: SET   ;
       S     "GLUE SCALE CONTROL DB".Pump_ON; 
@@ -616,26 +745,30 @@ TITLE =Fill stall detection - no measurable progress while filling, latches Alar
 // Reuses Alarm_Underfill (not a new alarm identity) per his wording -
 // it already interlocks Pump_ON off, same as overfill, see "Overfill/
 // Underfill interlock" below. #PROGRESS_MADE/#FILLSTALL_IN are computed
-// in "Timers" above. FillStallMinRise_SP (1kg default) and
-// FILLSTALL_IN_TIME (T#60S, set in "Timers") are PLACEHOLDERS - this
-// repo has no way to know the real fill rate, confirm/tune via HMI.
+// in "Timers" above. Fill_Rise_Min_SP (HMI value, grams/min - real
+// default 1500) is converted to a floored 1kg-minimum kg threshold in
+// "Timers" (see v0.39 changelog) before being used here.
+// FILLSTALL_IN_TIME (T#60S, set in "Timers") is still a PLACEHOLDER -
+// this repo has no way to know the real fill rate, confirm/tune via HMI.
       A     #PROGRESS_MADE;
       JCN   FSDN;
 
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
-      T     "GLUE SCALE CONTROL DB".FillStall_Ref;
+      T     "GLUE SCALE CONTROL DB".Fill_Rise_Ref;
 
 FSDN: A     "IEC TIMERS DB".FILLSTALL_OUT;
       S     "GLUE SCALE CONTROL DB".Alarm_Underfill;
 
 NETWORK
-TITLE =Fill timeout - pump running too long overall, even if weight is still slowly rising (NEW, placeholder duration)
+TITLE =Fill timeout - pump running too long overall, even if weight is still slowly rising (v0.38, HMI-adjustable)
 // Michou: "If Fill take too long ... could be a leak also." Separate
 // from the stall check above, which only catches a complete stall (zero
 // progress) - this catches an abnormally slow fill that never quite
-// stalls. Reuses Alarm_Underfill, same interlock. FILLTIME_IN_TIME
-// (T#5M, set in "Timers") is a PLACEHOLDER - needs Michou's real
-// expected fill duration.
+// stalls. Reuses Alarm_Underfill, same interlock. FILLTIME_IN_TIME is
+// computed in "Timers" from Normal_Fill_Time_SP (HMI-adjustable, INT
+// minutes) - 0 (Michou's own default) disables this check entirely
+// (see FILLTIME_IN's own guard in "Timers") rather than firing a
+// timeout instantly with PT=0.
       A     "IEC TIMERS DB".FILLTIME_OUT;
       S     "GLUE SCALE CONTROL DB".Alarm_Underfill;
 
@@ -647,21 +780,25 @@ TITLE =Possible leak - weight dropping faster than normal while idle (NEW alarm,
 // not during a fill, so it does NOT reuse Alarm_Underfill (stopping the
 // fill pump wouldn't do anything, it's not running). New Alarm_
 // PossibleLeak instead - latches, interlocks Pump_ON off (see Overfill/
-// Underfill interlock below), cleared by Reset_Alarms, drives the RED
+// Underfill interlock below), cleared by Alarms_Acknowledge, drives the RED
 // panel lamp (see Alarm lamp command). Does NOT yet interrupt whatever
 // downstream process is consuming the glue ("machine feed") - flagged,
 // not implemented, see chat: needs Michou to say what that action
 // actually is before this repo can safely drive it.
-// MaxDrainDrop_SP (5kg default) and DRAINCHK_IN_TIME (T#30S, set in
-// "Timers") are PLACEHOLDERS - needs Michou's real normal idle
-// consumption rate.
+// Drain_Drop_Max_SP is an HMI value in grams/min (real default 120) -
+// "Timers" converts it into a DYNAMIC window (#DRAINWIN_TIME, fed as
+// DRAINCHK_IN_TIME) sized so a drop at exactly that configured rate
+// equals a fixed 1kg margin - the comparison below just checks against
+// that fixed 1kg, the SP itself is absorbed into the window length (see
+// v0.39 changelog for why a fixed 30s window couldn't survive floor-
+// clamping at this rate without badly distorting sensitivity).
       A     "IEC TIMERS DB".DRAINCHK_OUT;
       JCN   DKDN;
 
       L     "GLUE SCALE CONTROL DB".DrainCheck_Ref;
       L     "GLUE SCALE CONTROL DB".GrossWeight_Actual;
       -I    ;
-      L     "GLUE SCALE CONTROL DB".MaxDrainDrop_SP;
+      L     1; // fixed 1kg margin - see this network's header comment
       >I    ;
       S     "GLUE SCALE CONTROL DB".Alarm_PossibleLeak;
 
@@ -709,7 +846,7 @@ TITLE =Overfill/Underfill interlock - blocks the pump while either is l
 // "controls the pump" here means blocking automatic re-engagement, not
 // an immediate stop - both read the same way: force Pump_ON off and
 // keep it off while either alarm (or Alarm_ScaleFault) is latched,
-// until Reset_Alarms clears it. Alarm_PossibleLeak (v0.36) added here
+// until Alarms_Acknowledge clears it. Alarm_PossibleLeak (v0.36) added here
 // too - don't let the pump start a new fill into a container that's
 // possibly leaking.
       A     "GLUE SCALE CONTROL DB".Alarm_Overfill;
@@ -740,15 +877,15 @@ TITLE =Exit point for parse-error skip
 SKIP: NOP   0; 
 
 NETWORK
-TITLE =Alarm reset switch -> Reset_Alarms (completes Michou's WHT_SW_1_Pump_Test wiring pattern, v0.31, not yet confirmed)
+TITLE =Alarm reset switch -> Alarms_Acknowledge (completes Michou's WHT_SW_1_Pump_Test wiring pattern, v0.31, not yet confirmed)
 
       A     "INPUTS DB".WHT_SW_3_Alarm_Reset;
-      =     "GLUE SCALE CONTROL DB".Reset_Alarms;
+      =     "GLUE SCALE CONTROL DB".Alarms_Acknowledge;
 
 NETWORK
 TITLE =Reset latched alarms - HMI-driven, runs regardless OF this scan'
 
-      A     "GLUE SCALE CONTROL DB".Reset_Alarms;
+      A     "GLUE SCALE CONTROL DB".Alarms_Acknowledge;
       R     "GLUE SCALE CONTROL DB".Alarm_Overfill;
       R     "GLUE SCALE CONTROL DB".Alarm_Underfill;
       R     "GLUE SCALE CONTROL DB".Alarm_ScaleFault;
