@@ -272,17 +272,31 @@ TITLE =Sync HMI setpoints -> scale setpoints (unconditional, every scan
 // Only these fields correspond between "HMI DB" and DB105 - see v0.15/
 // v0.18 changelogs for why the other same-offset fields must NOT be
 // copied this way.
+   NETWORK
+TITLE =Sync HMI setpoints -> scale setpoints (unconditional, every scan
+// Only these fields correspond between "HMI DB" and DB105 - see v0.15/
+// v0.18 changelogs for why the other same-offset fields must NOT be
+// copied this way.
       L     "HMI DB".Fill_Start_Weight_SP; 
       T     "GLUE SCALE CONTROL DB".Fill_Start_SP; 
-
+//;
       L     "HMI DB".Fill_Stop_Weight_SP; 
       T     "GLUE SCALE CONTROL DB".Fill_Stop_SP; 
-
+//;
       L     "HMI DB".AlarmLimit_Overfill_SP; 
       T     "GLUE SCALE CONTROL DB".AlarmLimit_Overfill_SP; 
-
+//;
       L     "HMI DB".AlarmLimit_Underfill_SP; 
       T     "GLUE SCALE CONTROL DB".AlarmLimit_Underfill_SP; 
+//;
+      L     "HMI DB".Fill_Rise_Min_SP; 
+      T     "GLUE SCALE CONTROL DB".Fill_Rise_Min_SP; 
+//;
+      L     "HMI DB".Drain_Drop_Max_SP; 
+      T     "GLUE SCALE CONTROL DB".Drain_Drop_Max_SP; 
+//;
+      L     "HMI DB".Normal_Fill_Time_SP; 
+      T     "GLUE SCALE CONTROL DB".Fill_Rise_Ref; 
 
 NETWORK
 TITLE =Update
